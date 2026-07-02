@@ -562,6 +562,7 @@ class JarvisLive:
         self._briefing_sent = False          # morning briefing fires once per process
         self._sys_monitor   = SystemMonitor()  # persistent cooldown state
         self._last_voice_time = 0.0
+        self._play_stream     = None
 
     def _make_remote_key(self):
         """Called from Qt main thread when user presses Remote Control."""
@@ -688,6 +689,26 @@ class JarvisLive:
         short = str(error)[:120]
         self.ui.write_log(f"ERR: {tool_name} — {short}")
         self.speak(f"Sir, {tool_name} encountered an error. {short}")
+
+    def handle_interruption(self):
+        self.ui.write_log("SYS: Interruption detected.")
+        if self.audio_in_queue:
+            while not self.audio_in_queue.empty():
+                try:
+                    self.audio_in_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+        if self._play_stream is not None:
+            try:
+                self._play_stream.stop()
+                self._play_stream.close()
+            except Exception as e:
+                print(f"[ALICE] Error stopping stream: {e}")
+            self._play_stream = None
+        
+        if self._turn_done_event:
+            self._turn_done_event.clear()
+        self.set_speaking(False)
 
     def _build_config(self) -> types.LiveConnectConfig:
         from datetime import datetime
@@ -997,6 +1018,9 @@ class JarvisLive:
                     if response.server_content:
                         sc = response.server_content
 
+                        if sc.interrupted:
+                            self.handle_interruption()
+
                         if sc.output_transcription and sc.output_transcription.text:
                             txt = _clean_transcript(sc.output_transcription.text)
                             if txt:
@@ -1050,6 +1074,8 @@ class JarvisLive:
     async def _play_audio(self):
         print("[ALICE] 🔊 Play started")
         stream = None
+        idle_ticks = 0
+        self._play_stream = None
 
         try:
             while True:
@@ -1058,7 +1084,20 @@ class JarvisLive:
                         self.audio_in_queue.get(),
                         timeout=0.1
                     )
+                    idle_ticks = 0
                 except asyncio.TimeoutError:
+                    if stream is not None:
+                        idle_ticks += 1
+                        if idle_ticks >= 5: # 0.5s of silence
+                            try:
+                                stream.stop()
+                                stream.close()
+                            except Exception:
+                                pass
+                            stream = None
+                            self._play_stream = None
+                            idle_ticks = 0
+
                     if (
                         self._turn_done_event
                         and self._turn_done_event.is_set()
@@ -1066,13 +1105,6 @@ class JarvisLive:
                     ):
                         self.set_speaking(False)
                         self._turn_done_event.clear()
-                        if stream is not None:
-                            try:
-                                stream.stop()
-                                stream.close()
-                            except Exception:
-                                pass
-                            stream = None
                     continue
 
                 self.set_speaking(True)
@@ -1085,14 +1117,25 @@ class JarvisLive:
                             blocksize=CHUNK_SIZE,
                         )
                         stream.start()
+                        self._play_stream = stream
                     except Exception as se:
                         print(f"[ALICE] ❌ Failed to open audio output stream: {se}")
                         continue
 
-                await asyncio.to_thread(stream.write, chunk)
+                try:
+                    await asyncio.to_thread(stream.write, chunk)
+                except Exception as we:
+                    print(f"[ALICE] Play chunk error (possibly stream closed): {we}")
+                    if stream is not None:
+                        try:
+                            stream.stop()
+                            stream.close()
+                        except Exception:
+                            pass
+                        stream = None
+                        self._play_stream = None
         except Exception as e:
             print(f"[ALICE] ❌ Play error: {e}")
-            raise
         finally:
             self.set_speaking(False)
             if stream is not None:
@@ -1101,6 +1144,7 @@ class JarvisLive:
                     stream.close()
                 except Exception:
                     pass
+                self._play_stream = None
 
     # ── Morning briefing ────────────────────────────────────────────────────────
 
