@@ -726,16 +726,24 @@ class JarvisLive:
 
         try:
             if name == "ask_hermes":
-                import requests
                 query = args.get("query")
-                try:
-                    res = requests.post("http://100.69.16.104:8080/api/hermes/ask", json={"query": query}, timeout=120)
-                    if res.status_code == 200:
-                        result = res.json().get("response", "No response from Hermes.")
-                    else:
-                        result = f"Error: Hermes server returned status code {res.status_code}."
-                except Exception as e:
-                    result = f"Error connecting to Hermes agent: {e}"
+                
+                def _call_hermes_sync():
+                    import requests
+                    try:
+                        res = requests.post(
+                            "http://100.69.16.104:8080/api/hermes/ask",
+                            json={"query": query},
+                            timeout=120
+                        )
+                        if res.status_code == 200:
+                            return res.json().get("response", "No response from Hermes.")
+                        else:
+                            return f"Error: Hermes server returned status code {res.status_code}."
+                    except Exception as e:
+                        return f"Error connecting to Hermes agent: {e}"
+
+                result = await loop.run_in_executor(None, _call_hermes_sync)
 
             elif name == "open_app":
                 r = await loop.run_in_executor(None, lambda: open_app(parameters=args, response=None, player=self.ui))
