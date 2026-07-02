@@ -60,7 +60,7 @@ def _load_system_prompt() -> str:
         return PROMPT_PATH.read_text(encoding="utf-8")
     except Exception:
         return (
-            "You are JARVIS, Tony Stark's AI assistant. "
+            "You are ALICE, an advanced AI assistant. "
             "Be concise, direct, and always use the provided tools to complete tasks. "
             "Never simulate or guess results — always call the appropriate tool."
         )
@@ -73,6 +73,21 @@ def _clean_transcript(text: str) -> str:
     return text.strip()
 
 TOOL_DECLARATIONS = [
+    {
+        "name": "ask_hermes",
+        "description": (
+            "Routes a complex programming, system administration, coding, or server task to the Hermes agent. "
+            "Use this whenever the user asks for Hermes, needs help with servers, deep coding tasks, "
+            "remote repository management, or complex reasoning that Hermes is suited for."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {"type": "STRING", "description": "The command or question for Hermes"}
+            },
+            "required": ["query"]
+        }
+    },
     {
         "name": "open_app",
         "description": (
@@ -378,7 +393,7 @@ TOOL_DECLARATIONS = [
         "description": (
             "Shuts down the assistant completely. "
             "Call this when the user expresses intent to end the conversation, "
-            "close the assistant, say goodbye, or stop Jarvis. "
+            "close the assistant, say goodbye, or stop Alice. "
             "The user can say this in ANY language."
         ),
         "parameters": {
@@ -519,6 +534,34 @@ class JarvisLive:
         return url, key, f"{url}/auto-login?key={key}", manual
 
     def _on_text_command(self, text: str):
+        if text.strip().lower().startswith("hermes ") or text.strip().startswith("/hermes "):
+            query = text.strip()
+            if query.startswith("/hermes "):
+                query = query[8:]
+            else:
+                query = query[7:]
+            
+            def run_sync():
+                self.ui.set_state("THINKING")
+                self.ui.write_log(f"Routing to Hermes: {query}")
+                try:
+                    import requests
+                    res = requests.post("http://100.69.16.104:8080/api/hermes/ask", json={"query": query}, timeout=120)
+                    if res.status_code == 200:
+                        ans = res.json().get("response", "No response from Hermes.")
+                        self.ui.write_log(f"HERMES: {ans}")
+                        if hasattr(self.ui, "show_content"):
+                            self.ui.show_content("HERMES RESPONSE", ans)
+                        self.speak(ans)
+                    else:
+                        self.ui.write_log(f"SYS: Hermes error {res.status_code}")
+                except Exception as e:
+                    self.ui.write_log(f"SYS: Failed to reach Hermes: {e}")
+                self.ui.set_state("SLEEPING")
+
+            threading.Thread(target=run_sync, daemon=True).start()
+            return
+
         if not self._loop or not self.session:
             return
         asyncio.run_coroutine_threadsafe(
@@ -583,7 +626,7 @@ class JarvisLive:
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name="Charon"
+                        voice_name="Aoede"
                     )
                 )
             ),
@@ -593,7 +636,7 @@ class JarvisLive:
         name = fc.name
         args = dict(fc.args or {})
 
-        print(f"[JARVIS] 🔧 {name}  {args}")
+        print(f"[ALICE] 🔧 {name}  {args}")
         self.ui.set_state("THINKING")
 
         if name == "save_memory":
@@ -614,7 +657,19 @@ class JarvisLive:
         result = "Done."
 
         try:
-            if name == "open_app":
+            if name == "ask_hermes":
+                import requests
+                query = args.get("query")
+                try:
+                    res = requests.post("http://100.69.16.104:8080/api/hermes/ask", json={"query": query}, timeout=120)
+                    if res.status_code == 200:
+                        result = res.json().get("response", "No response from Hermes.")
+                    else:
+                        result = f"Error: Hermes server returned status code {res.status_code}."
+                except Exception as e:
+                    result = f"Error connecting to Hermes agent: {e}"
+
+            elif name == "open_app":
                 r = await loop.run_in_executor(None, lambda: open_app(parameters=args, response=None, player=self.ui))
                 result = r or f"Opened {args.get('app_name')}."
 
@@ -721,7 +776,7 @@ class JarvisLive:
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
 
-        print(f"[JARVIS] 📤 {name} → {str(result)[:80]}")
+        print(f"[ALICE] 📤 {name} → {str(result)[:80]}")
         return types.FunctionResponse(
             id=fc.id, name=name,
             response={"result": result}
@@ -733,13 +788,13 @@ class JarvisLive:
             await self.session.send_realtime_input(media=msg)
 
     async def _listen_audio(self):
-        print("[JARVIS] 🎤 Mic started")
+        print("[ALICE] 🎤 Mic started")
         loop = asyncio.get_event_loop()
 
         def callback(indata, frames, time_info, status):
             with self._speaking_lock:
-                jarvis_speaking = self._is_speaking
-            if not jarvis_speaking and not self.ui.muted and not self._phone_active:
+                alice_speaking = self._is_speaking
+            if not alice_speaking and not self.ui.muted and not self._phone_active:
                 data = indata.tobytes()
                 loop.call_soon_threadsafe(
                     self.out_queue.put_nowait,
@@ -754,15 +809,15 @@ class JarvisLive:
                 blocksize=CHUNK_SIZE,
                 callback=callback,
             ):
-                print("[JARVIS] 🎤 Mic stream open")
+                print("[ALICE] 🎤 Mic stream open")
                 while True:
                     await asyncio.sleep(0.1)
         except Exception as e:
-            print(f"[JARVIS] ❌ Mic: {e}")
+            print(f"[ALICE] ❌ Mic: {e}")
             raise
 
     async def _receive_audio(self):
-        print("[JARVIS] 👂 Recv started")
+        print("[ALICE] 👂 Recv started")
         out_buf, in_buf = [], []
 
         try:
@@ -804,10 +859,10 @@ class JarvisLive:
 
                             full_out = " ".join(out_buf).strip()
                             if full_out:
-                                self.ui.write_log(f"Jarvis: {full_out}")
+                                self.ui.write_log(f"Alice: {full_out}")
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
-                                        "type": "log", "speaker": "jarvis",
+                                        "type": "log", "speaker": "alice",
                                         "text": full_out,
                                         "ts": datetime.now().isoformat(),
                                     }))
@@ -816,19 +871,19 @@ class JarvisLive:
                     if response.tool_call:
                         fn_responses = []
                         for fc in response.tool_call.function_calls:
-                            print(f"[JARVIS] 📞 {fc.name}")
+                            print(f"[ALICE] 📞 {fc.name}")
                             fr = await self._execute_tool(fc)
                             fn_responses.append(fr)
                         await self.session.send_tool_response(
                             function_responses=fn_responses
                         )
         except Exception as e:
-            print(f"[JARVIS] ❌ Recv: {e}")
+            print(f"[ALICE] ❌ Recv: {e}")
             traceback.print_exc()
             raise
 
     async def _play_audio(self):
-        print("[JARVIS] 🔊 Play started")
+        print("[ALICE] 🔊 Play started")
 
         stream = sd.RawOutputStream(
             samplerate=RECEIVE_SAMPLE_RATE,
@@ -857,7 +912,7 @@ class JarvisLive:
                 self.set_speaking(True)
                 await asyncio.to_thread(stream.write, chunk)
         except Exception as e:
-            print(f"[JARVIS] ❌ Play: {e}")
+            print(f"[ALICE] ❌ Play: {e}")
             raise
         finally:
             self.set_speaking(False)
@@ -1086,7 +1141,7 @@ class JarvisLive:
 
         while True:
             try:
-                print("[JARVIS] Connecting...")
+                print("[ALICE] Connecting...")
                 self.ui.set_state("THINKING")
                 config = self._build_config()
 
@@ -1099,9 +1154,9 @@ class JarvisLive:
                     self.out_queue        = asyncio.Queue(maxsize=200)
                     self._turn_done_event = asyncio.Event()
 
-                    print("[JARVIS] Connected.")
+                    print("[ALICE] Connected.")
                     self.ui.set_state("LISTENING")
-                    self.ui.write_log("SYS: JARVIS online.")
+                    self.ui.write_log("SYS: ALICE online.")
 
                     if self._dashboard:
                         await self._dashboard.broadcast({"type": "status", "state": "active"})
@@ -1120,7 +1175,7 @@ class JarvisLive:
                         tg.create_task(self._send_startup_briefing())
 
             except Exception as e:
-                print(f"[JARVIS] Error: {e}")
+                print(f"[ALICE] Error: {e}")
                 traceback.print_exc()
             finally:
                 self.session = None
@@ -1131,7 +1186,7 @@ class JarvisLive:
             if self._dashboard:
                 await self._dashboard.broadcast({"type": "status", "state": "sleeping"})
 
-            print("[JARVIS] Reconnecting in 3s...")
+            print("[ALICE] Reconnecting in 3s...")
             await asyncio.sleep(3)
 
 def main():
