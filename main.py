@@ -991,8 +991,8 @@ class JarvisLive:
     async def _send_startup_briefing(self) -> None:
         """
         Two-phase briefing for instant perceived response:
-          Phase 1 — immediate greeting (no tools, no fetch) → Jarvis speaks in <2s
-          Phase 2 — news fetched in background, injected after greeting finishes
+          Phase 1 — immediate greeting (no tools, no fetch) → Alice speaks in <2s
+          Phase 2 — news fetched in background (turned off for now)
         """
         await asyncio.sleep(0.3)
         if not self.session:
@@ -1014,16 +1014,19 @@ class JarvisLive:
 
         # ── Phase 1: instant greeting — zero data needed ──────────────────────
         p1_lines = [
-            "[STARTUP_GREETING] Greet the user immediately. Keep it to 1-2 short sentences.",
+            "[STARTUP_GREETING] Greet the user immediately and naturally.",
+            "Identity: You are A.L.I.C.E, a friendly female AI assistant companion.",
             f"Current time: {time_str}.",
-            "- Say hello and mention the time naturally.",
-            "- Say you are checking today's headlines and will share them in a moment.",
+            "- Say hello in a warm, relaxed, and non-monotonous way (be creative and choose a friendly variation each time: cozy, cheerful, or sleek high-tech).",
+            "- Mention the time/hour naturally.",
+            "- Express readiness to assist Ham with his coding, projects, or tasks today.",
+            "- Keep it brief (1-2 sentences max).",
             "- Do NOT call any tools. Do NOT say [STARTUP_GREETING].",
             "- Respond in "
-            + (f"language: {lang}." if lang else "the user's language (default: English)."),
+            + (f"language: {lang}." if lang else "Indonesian Ragam Santai (casual Indonesian mixed with tech terms)."),
         ]
         if name:
-            p1_lines.append(f"- Address the user as {name}.")
+            p1_lines.append(f"- Address the user as {name} (or 'Ham').")
 
         await self.session.send_client_content(
             turns={"parts": [{"text": '\n'.join(p1_lines)}]},
@@ -1031,14 +1034,14 @@ class JarvisLive:
         )
         self.ui.write_log("SYS: Briefing phase 1 (greeting) sent.")
 
-        # ── Phase 2: fetch news in background, deliver after greeting plays ───
-        async def _guarded_news():
-            try:
-                await self._briefing_news_phase(lang)
-            except Exception as e:
-                print(f"[Briefing] Phase 2 error: {e}")
-                self.ui.write_log(f"SYS: Briefing news phase failed: {e}")
-        asyncio.create_task(_guarded_news())
+        # ── Phase 2: fetch news in background (turned off as requested) ───────
+        # async def _guarded_news():
+        #     try:
+        #         await self._briefing_news_phase(lang)
+        #     except Exception as e:
+        #         print(f"[Briefing] Phase 2 error: {e}")
+        #         self.ui.write_log(f"SYS: Briefing news phase failed: {e}")
+        # asyncio.create_task(_guarded_news())
 
     async def _briefing_news_phase(self, lang: str) -> None:
         """
