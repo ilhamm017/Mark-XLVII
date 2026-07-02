@@ -431,7 +431,7 @@ TOOL_DECLARATIONS = [
         }
     },
     {
-        "name": "shutdown_jarvis",
+        "name": "shutdown_alice",
         "description": (
             "Shuts down the assistant completely. "
             "Call this when the user expresses intent to end the conversation, "
@@ -823,7 +823,7 @@ class JarvisLive:
                 r = await loop.run_in_executor(None, get_system_status)
                 result = str(r)
 
-            elif name == "shutdown_jarvis":
+            elif name == "shutdown_alice":
                 self.ui.write_log("SYS: Shutdown requested.")
                 self.speak("Goodbye, sir.")
                 def _shutdown():
