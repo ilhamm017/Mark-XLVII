@@ -252,6 +252,8 @@ class HudCanvas(QWidget):
         self.muted    = False
         self.speaking = False
         self.state    = "INITIALISING"
+        self.user_speaking = False
+        self.mic_active = False
 
         self._tick       = 0
         self._scale      = 1.0
@@ -453,7 +455,7 @@ class HudCanvas(QWidget):
             p.setPen(QPen(qcol(C.PRI, min(255, int(self._halo * 2))), 1))
             p.setFont(QFont("Courier New", 13, QFont.Weight.Bold))
             p.drawText(QRectF(cx - 80, cy - 14, 160, 28),
-                       Qt.AlignmentFlag.AlignCenter, "J.A.R.V.I.S")
+                       Qt.AlignmentFlag.AlignCenter, "A.L.I.C.E")
 
         # particles
         for pt in self._particles:
@@ -475,8 +477,13 @@ class HudCanvas(QWidget):
             sym = "▷" if self._blink else "▶"
             txt, col = f"{sym}  PROCESSING", qcol(C.ACC2)
         elif self.state == "LISTENING":
-            sym = "●" if self._blink else "○"
-            txt, col = f"{sym}  LISTENING",  qcol(C.GREEN)
+            if self.user_speaking:
+                txt, col = "🎤  USER SPEAKING", qcol(C.GREEN)
+            elif self.mic_active:
+                sym = "●" if self._blink else "○"
+                txt, col = f"{sym}  LISTENING",  qcol(C.GREEN)
+            else:
+                txt, col = "○  MIC IDLE", qcol(C.TEXT_DIM)
         else:
             sym = "●" if self._blink else "○"
             txt, col = f"{sym}  {self.state}", qcol(C.PRI)
@@ -495,6 +502,12 @@ class HudCanvas(QWidget):
             elif self.speaking:
                 hgt = random.randint(3, 20)
                 cl  = qcol(C.PRI) if hgt > 12 else qcol(C.PRI_DIM)
+            elif self.state == "LISTENING" and self.user_speaking:
+                hgt = random.randint(3, 24)
+                cl  = qcol(C.GREEN) if hgt > 12 else qcol(C.BORDER_B)
+            elif self.state == "LISTENING" and self.mic_active:
+                hgt = int(3 + 1.5 * math.sin(self._tick * 0.15 + i * 0.6))
+                cl  = qcol(C.GREEN)
             else:
                 hgt = int(3 + 2 * math.sin(self._tick * 0.09 + i * 0.6))
                 cl  = qcol(C.BORDER_B)
@@ -1216,6 +1229,8 @@ class MainWindow(QMainWindow):
     _log_sig     = pyqtSignal(str)
     _state_sig   = pyqtSignal(str)
     _content_sig = pyqtSignal(str, str)   # (title, text) — thread-safe content display
+    _user_speak_sig = pyqtSignal(bool)
+    _mic_active_sig = pyqtSignal(bool)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -1284,6 +1299,8 @@ class MainWindow(QMainWindow):
         self._log_sig.connect(self._log.append_log)
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
+        self._user_speak_sig.connect(self._apply_user_speaking)
+        self._mic_active_sig.connect(self._apply_mic_active)
 
         self._overlay: SetupOverlay | None = None
         self._ready = self._check_config()
@@ -1811,6 +1828,14 @@ class MainWindow(QMainWindow):
         self.hud.state    = state
         self.hud.speaking = (state == "SPEAKING")
 
+    def _apply_user_speaking(self, active: bool):
+        self.hud.user_speaking = active
+        self.hud.update()
+
+    def _apply_mic_active(self, active: bool):
+        self.hud.mic_active = active
+        self.hud.update()
+
     def _check_config(self) -> bool:
         if not API_FILE.exists(): return False
         try:
@@ -1903,6 +1928,12 @@ class JarvisUI:
     def wait_for_api_key(self):
         while not self._win._ready:
             time.sleep(0.1)
+
+    def set_user_speaking(self, active: bool):
+        self._win._user_speak_sig.emit(active)
+
+    def set_mic_active(self, active: bool):
+        self._win._mic_active_sig.emit(active)
 
     def show_content(self, title: str, text: str):
         """Thread-safe: display content in the panel below the HUD."""

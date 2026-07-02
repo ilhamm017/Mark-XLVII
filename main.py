@@ -561,6 +561,7 @@ class JarvisLive:
         self._dashboard     = None
         self._briefing_sent = False          # morning briefing fires once per process
         self._sys_monitor   = SystemMonitor()  # persistent cooldown state
+        self._last_voice_time = 0.0
 
     def _make_remote_key(self):
         """Called from Qt main thread when user presses Remote Control."""
@@ -861,6 +862,20 @@ class JarvisLive:
         def callback(indata, frames, time_info, status):
             if status:
                 print(f"[ALICE] 🎤 Mic status warning: {status}")
+            
+            try:
+                import numpy as np
+                import time
+                rms = np.sqrt(np.mean(indata**2)) if len(indata) > 0 else 0
+                now = time.time()
+                if rms > 200:
+                    self._last_voice_time = now
+                    loop.call_soon_threadsafe(self.ui.set_user_speaking, True)
+                elif now - self._last_voice_time > 0.8:
+                    loop.call_soon_threadsafe(self.ui.set_user_speaking, False)
+            except Exception:
+                pass
+
             with self._speaking_lock:
                 alice_speaking = self._is_speaking
             if not alice_speaking and not self.ui.muted and not self._phone_active:
@@ -880,17 +895,22 @@ class JarvisLive:
                     continue
 
                 print("[ALICE] 🎤 Opening mic stream...")
-                with sd.InputStream(
-                    samplerate=SEND_SAMPLE_RATE,
-                    channels=CHANNELS,
-                    dtype="int16",
-                    blocksize=CHUNK_SIZE,
-                    callback=callback,
-                ) as stream:
-                    print("[ALICE] 🎤 Mic stream open and active")
-                    while stream.active and self.session:
-                        await asyncio.sleep(0.5)
-                    print("[ALICE] ⚠️ Mic stream inactive or session closed. Releasing...")
+                loop.call_soon_threadsafe(self.ui.set_mic_active, True)
+                try:
+                    with sd.InputStream(
+                        samplerate=SEND_SAMPLE_RATE,
+                        channels=CHANNELS,
+                        dtype="int16",
+                        blocksize=CHUNK_SIZE,
+                        callback=callback,
+                    ) as stream:
+                        print("[ALICE] 🎤 Mic stream open and active")
+                        while stream.active and self.session:
+                            await asyncio.sleep(0.5)
+                        print("[ALICE] ⚠️ Mic stream inactive or session closed. Releasing...")
+                finally:
+                    loop.call_soon_threadsafe(self.ui.set_mic_active, False)
+                    loop.call_soon_threadsafe(self.ui.set_user_speaking, False)
                 await asyncio.sleep(1.0)
         except Exception as e:
             print(f"[ALICE] ❌ Mic: {e}")
