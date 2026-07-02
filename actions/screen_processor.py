@@ -255,6 +255,7 @@ class _VisionSession:
         client = genai.Client(
             api_key=_get_api_key(),
             http_options={"api_version": "v1beta"},
+            use_direct_google=True
         )
         config = gtypes.LiveConnectConfig(
             response_modalities=["AUDIO"],

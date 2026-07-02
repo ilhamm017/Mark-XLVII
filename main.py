@@ -10,6 +10,48 @@ from pathlib import Path
 import sounddevice as sd
 from google import genai
 from google.genai import types
+
+# --- Sub2API Monkeypatching ---
+_OriginalClient = genai.Client
+
+class Sub2APIClient(_OriginalClient):
+    def __init__(self, *args, **kwargs):
+        use_direct = kwargs.pop('use_direct_google', False)
+        if not use_direct:
+            try:
+                from pathlib import Path
+                import json
+                base_dir = Path(__file__).resolve().parent
+                config_path = base_dir / "config" / "api_keys.json"
+                
+                # Default fallback values
+                api_key = "sk-4a76ada3ad42cccd8e85725cce8778ee42dd8010fd41249cf4dab250c7b62948"
+                base_url = "https://sub2api.randompulse.my.id/antigravity"
+                
+                if config_path.exists():
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                    api_key = cfg.get("sub2api_key", api_key)
+                    base_url = cfg.get("sub2api_base_url", base_url)
+                
+                kwargs['api_key'] = api_key
+                http_opts = kwargs.get('http_options', {})
+                if isinstance(http_opts, dict):
+                    http_opts = http_opts.copy()
+                    http_opts['base_url'] = base_url
+                    http_opts['api_version'] = 'v1beta'
+                elif http_opts is None:
+                    http_opts = {
+                        'base_url': base_url,
+                        'api_version': 'v1beta'
+                    }
+                kwargs['http_options'] = http_opts
+            except Exception as e:
+                print(f"[Sub2API] Failed to route client: {e}")
+        super().__init__(*args, **kwargs)
+
+genai.Client = Sub2APIClient
+# ------------------------------
 from ui import JarvisUI
 from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt,
@@ -1149,7 +1191,8 @@ class JarvisLive:
 
         client = genai.Client(
             api_key=_get_api_key(),
-            http_options={"api_version": "v1beta"}
+            http_options={"api_version": "v1beta"},
+            use_direct_google=True
         )
 
         # Start dashboard (optional — needs: pip install fastapi "uvicorn[standard]" cryptography)
