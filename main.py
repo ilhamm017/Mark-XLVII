@@ -598,9 +598,23 @@ class JarvisLive:
 
     def _build_config(self) -> types.LiveConnectConfig:
         from datetime import datetime
+        import requests
 
-        memory     = load_memory()
-        mem_str    = format_memory_for_prompt(memory)
+        # Try to pull synced memory from Armbian server (Honcho)
+        mem_str = ""
+        try:
+            res = requests.get("http://100.69.16.104:8080/api/hermes/memory", timeout=5)
+            if res.status_code == 200:
+                mem_str = res.json().get("prompt_string", "")
+                print("[Memory] Dynamically loaded Honcho memory from server.")
+        except Exception as e:
+            print(f"[Memory] Server connection failed, falling back to local: {e}")
+
+        # Fallback to local memory if server query fails or returns empty
+        if not mem_str:
+            memory = load_memory()
+            mem_str = format_memory_for_prompt(memory)
+
         sys_prompt = _load_system_prompt()
 
         now      = datetime.now()
@@ -646,6 +660,17 @@ class JarvisLive:
             if key and value:
                 update_memory({category: {key: {"value": value}}})
                 print(f"[Memory] 💾 save_memory: {category}/{key} = {value}")
+                # Sync with Armbian server (Honcho & Hermes)
+                try:
+                    import requests
+                    requests.post(
+                        "http://100.69.16.104:8080/api/hermes/memory/save",
+                        json={"category": category, "key": key, "value": value},
+                        timeout=5
+                    )
+                    print("[Memory] Successfully synced save_memory with server.")
+                except Exception as e:
+                    print(f"[Memory] Failed to sync save_memory with server: {e}")
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
             return types.FunctionResponse(
