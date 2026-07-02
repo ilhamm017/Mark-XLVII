@@ -589,13 +589,22 @@ class JarvisLive:
                 self.ui.write_log(f"Routing to Hermes: {query}")
                 try:
                     import requests
-                    res = requests.post("http://100.69.16.104:8080/api/hermes/ask", json={"query": query}, timeout=120)
+                    res = requests.post("http://100.69.16.104:8080/api/hermes/ask", json={"query": query}, timeout=10)
                     if res.status_code == 200:
-                        ans = res.json().get("response", "No response from Hermes.")
-                        self.ui.write_log(f"HERMES: {ans}")
-                        if hasattr(self.ui, "show_content"):
-                            self.ui.show_content("HERMES RESPONSE", ans)
-                        self.speak(ans)
+                        res_data = res.json()
+                        if res_data.get("status") == "queued":
+                            task_id = res_data.get("task_id")
+                            self.ui.write_log(f"SYS: Task queued successfully. ID: {task_id}")
+                            if self._loop:
+                                asyncio.run_coroutine_threadsafe(
+                                    self._poll_hermes_task(task_id, query),
+                                    self._loop
+                                )
+                            else:
+                                self.ui.write_log("SYS: Async loop not running. Cannot poll task status.")
+                        else:
+                            msg = res_data.get("message", "Failed to queue task.")
+                            self.ui.write_log(f"SYS: {msg}")
                     else:
                         self.ui.write_log(f"SYS: Hermes error {res.status_code}")
                 except Exception as e:
@@ -633,6 +642,47 @@ class JarvisLive:
             ),
             self._loop
         )
+
+    async def _poll_hermes_task(self, task_id: str, query: str):
+        self.ui.write_log(f"SYS: Started polling task {task_id}")
+        url = f"http://100.69.16.104:8080/api/hermes/task/{task_id}"
+        
+        await asyncio.sleep(2)
+        
+        import requests
+        
+        def _get_status():
+            try:
+                res = requests.get(url, timeout=5)
+                if res.status_code == 200:
+                    return res.json()
+                return {"status": "error", "message": f"Server status code {res.status_code}"}
+            except Exception as e:
+                return {"status": "error", "message": str(e)}
+                
+        loop = asyncio.get_event_loop()
+        
+        while True:
+            data = await loop.run_in_executor(None, _get_status)
+            status = data.get("status")
+            
+            if status == "completed":
+                response = data.get("response", "No response from Hermes.")
+                self.ui.write_log(f"HERMES: Task {task_id} completed.")
+                if hasattr(self.ui, "show_content"):
+                    self.ui.show_content(f"HERMES RESPONSE ({task_id})", response)
+                self.speak(f"Sir, task {task_id} has been completed on the Hermes server. Here is the response:\n{response}")
+                break
+            elif status == "failed":
+                response = data.get("response", "Unknown failure.")
+                self.ui.write_log(f"HERMES: Task {task_id} failed.")
+                self.speak(f"Sir, the task {task_id} on Hermes server has failed: {response}")
+                break
+            elif status == "error":
+                message = data.get("message", "")
+                self.ui.write_log(f"SYS: Task poll connection error: {message}")
+                
+            await asyncio.sleep(3)
 
     def speak_error(self, tool_name: str, error: str):
         short = str(error)[:120]
@@ -734,16 +784,23 @@ class JarvisLive:
                         res = requests.post(
                             "http://100.69.16.104:8080/api/hermes/ask",
                             json={"query": query},
-                            timeout=120
+                            timeout=10
                         )
                         if res.status_code == 200:
-                            return res.json().get("response", "No response from Hermes.")
+                            return res.json()
                         else:
-                            return f"Error: Hermes server returned status code {res.status_code}."
+                            return {"status": "error", "message": f"Server status code {res.status_code}"}
                     except Exception as e:
-                        return f"Error connecting to Hermes agent: {e}"
+                        return {"status": "error", "message": str(e)}
 
-                result = await loop.run_in_executor(None, _call_hermes_sync)
+                res_data = await loop.run_in_executor(None, _call_hermes_sync)
+                if res_data.get("status") == "queued":
+                    task_id = res_data.get("task_id")
+                    result = f"Task successfully queued on Hermes server. Task ID: {task_id}. I will speak the response once it is ready."
+                    asyncio.create_task(self._poll_hermes_task(task_id, query))
+                else:
+                    msg = res_data.get("message", "Failed to queue task.")
+                    result = f"Failed to submit task to Hermes: {msg}"
 
             elif name == "open_app":
                 r = await loop.run_in_executor(None, lambda: open_app(parameters=args, response=None, player=self.ui))
