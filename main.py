@@ -859,26 +859,39 @@ class JarvisLive:
         loop = asyncio.get_event_loop()
 
         def callback(indata, frames, time_info, status):
+            if status:
+                print(f"[ALICE] 🎤 Mic status warning: {status}")
             with self._speaking_lock:
                 alice_speaking = self._is_speaking
             if not alice_speaking and not self.ui.muted and not self._phone_active:
                 data = indata.tobytes()
-                loop.call_soon_threadsafe(
-                    self.out_queue.put_nowait,
-                    {"data": data, "mime_type": "audio/pcm"}
-                )
+                try:
+                    loop.call_soon_threadsafe(
+                        self.out_queue.put_nowait,
+                        {"data": data, "mime_type": "audio/pcm"}
+                    )
+                except Exception:
+                    pass
 
         try:
-            with sd.InputStream(
-                samplerate=SEND_SAMPLE_RATE,
-                channels=CHANNELS,
-                dtype="int16",
-                blocksize=CHUNK_SIZE,
-                callback=callback,
-            ):
-                print("[ALICE] 🎤 Mic stream open")
-                while True:
-                    await asyncio.sleep(0.1)
+            while True:
+                if not self.session:
+                    await asyncio.sleep(0.5)
+                    continue
+
+                print("[ALICE] 🎤 Opening mic stream...")
+                with sd.InputStream(
+                    samplerate=SEND_SAMPLE_RATE,
+                    channels=CHANNELS,
+                    dtype="int16",
+                    blocksize=CHUNK_SIZE,
+                    callback=callback,
+                ) as stream:
+                    print("[ALICE] 🎤 Mic stream open and active")
+                    while stream.active and self.session:
+                        await asyncio.sleep(0.5)
+                    print("[ALICE] ⚠️ Mic stream inactive or session closed. Releasing...")
+                await asyncio.sleep(1.0)
         except Exception as e:
             print(f"[ALICE] ❌ Mic: {e}")
             raise
@@ -951,14 +964,7 @@ class JarvisLive:
 
     async def _play_audio(self):
         print("[ALICE] 🔊 Play started")
-
-        stream = sd.RawOutputStream(
-            samplerate=RECEIVE_SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype="int16",
-            blocksize=CHUNK_SIZE,
-        )
-        stream.start()
+        stream = None
 
         try:
             while True:
@@ -975,16 +981,41 @@ class JarvisLive:
                     ):
                         self.set_speaking(False)
                         self._turn_done_event.clear()
+                        if stream is not None:
+                            try:
+                                stream.stop()
+                                stream.close()
+                            except Exception:
+                                pass
+                            stream = None
                     continue
+
                 self.set_speaking(True)
+                if stream is None:
+                    try:
+                        stream = sd.RawOutputStream(
+                            samplerate=RECEIVE_SAMPLE_RATE,
+                            channels=CHANNELS,
+                            dtype="int16",
+                            blocksize=CHUNK_SIZE,
+                        )
+                        stream.start()
+                    except Exception as se:
+                        print(f"[ALICE] ❌ Failed to open audio output stream: {se}")
+                        continue
+
                 await asyncio.to_thread(stream.write, chunk)
         except Exception as e:
-            print(f"[ALICE] ❌ Play: {e}")
+            print(f"[ALICE] ❌ Play error: {e}")
             raise
         finally:
             self.set_speaking(False)
-            stream.stop()
-            stream.close()
+            if stream is not None:
+                try:
+                    stream.stop()
+                    stream.close()
+                except Exception:
+                    pass
 
     # ── Morning briefing ────────────────────────────────────────────────────────
 
