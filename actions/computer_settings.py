@@ -22,6 +22,7 @@ except ImportError:
     _PYPERCLIP = False
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
+_SUBPROCESS_FLAGS = 0x08000000 if _OS == "Windows" else 0
 
 
 def _get_base_dir() -> Path:
@@ -162,7 +163,8 @@ def brightness_up():
                  "(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightnessMethods)"
                  ".WmiSetBrightness(1, [math]::Min(100, "
                  "(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightness).CurrentBrightness + 10))"],
-                capture_output=True, timeout=5
+                capture_output=True, timeout=5,
+                creationflags=_SUBPROCESS_FLAGS
             )
         except Exception as e:
             print(f"[Settings] Brightness up failed on Windows: {e}")
@@ -191,7 +193,8 @@ def brightness_down():
                  "(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightnessMethods)"
                  ".WmiSetBrightness(1, [math]::Max(0, "
                  "(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightness).CurrentBrightness - 10))"],
-                capture_output=True, timeout=5
+                capture_output=True, timeout=5,
+                creationflags=_SUBPROCESS_FLAGS
             )
         except Exception as e:
             print(f"[Settings] Brightness down failed on Windows: {e}")

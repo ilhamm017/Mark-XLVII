@@ -43,6 +43,7 @@ _LEFT_W  = 148
 _RIGHT_W = 340
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
+_SUBPROCESS_FLAGS = 0x08000000 if _OS == "Windows" else 0
 
 
 class C:
@@ -127,7 +128,8 @@ class _SysMetrics:
             r = subprocess.run(
                 ["nvidia-smi", "--query-gpu=utilization.gpu",
                  "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=2
+                capture_output=True, text=True, timeout=2,
+                creationflags=_SUBPROCESS_FLAGS
             )
             if r.returncode == 0:
                 vals = [float(v.strip()) for v in r.stdout.strip().split("\n") if v.strip()]
@@ -219,7 +221,8 @@ class _SysMetrics:
                 r = subprocess.run(
                     ["powershell", "-Command",
                      "(Get-WmiObject MSAcpi_ThermalZoneTemperature -Namespace root/wmi).CurrentTemperature"],
-                    capture_output=True, text=True, timeout=3
+                    capture_output=True, text=True, timeout=3,
+                    creationflags=_SUBPROCESS_FLAGS
                 )
                 if r.returncode == 0 and r.stdout.strip():
                     raw = float(r.stdout.strip().split("\n")[0])
