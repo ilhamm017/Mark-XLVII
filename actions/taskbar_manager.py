@@ -1,7 +1,6 @@
 # taskbar_manager.py
 import platform
 import subprocess
-from pathlib import Path
 
 _OS = platform.system()
 
@@ -96,6 +95,7 @@ def get_visible_windows_macos() -> list[dict]:
     return []
 
 def get_visible_windows_linux() -> list[dict]:
+    # Fallback using wmctrl
     try:
         res = subprocess.run(["wmctrl", "-lp"], capture_output=True, text=True, timeout=5)
         if res.returncode == 0:
@@ -103,18 +103,8 @@ def get_visible_windows_linux() -> list[dict]:
             for line in res.stdout.splitlines():
                 parts = line.split(None, 4)
                 if len(parts) >= 5:
-                    win_id = parts[0]
-                    pid = parts[2]
                     title = parts[4].strip()
-                    proc_name = "Unknown"
-                    if pid != "-1":
-                        try:
-                            comm_path = Path(f"/proc/{pid}/comm")
-                            if comm_path.exists():
-                                proc_name = comm_path.read_text(encoding="utf-8").strip()
-                        except Exception:
-                            pass
-                    windows.append({"title": title, "process_name": proc_name, "id": win_id, "pid": pid})
+                    windows.append({"title": title, "process_name": "Unknown"})
             return windows
     except Exception:
         pass
@@ -141,25 +131,50 @@ def list_taskbar_apps(parameters=None, response=None, player=None, session_memor
 
 
 def get_active_window(parameters=None, response=None, player=None, session_memory=None) -> str:
-    """Returns the title and process name of the active (foreground) window on the screen."""
+    """Returns the title and process name of the active (foreground) window on the screen.
+    If the active window is ALICE/Jarvis itself, it finds the window directly behind/underneath it.
+    """
+    import os
+    current_pid = os.getpid()
+
+    def is_alice_window(title: str, pid: int | None) -> bool:
+        if pid == current_pid:
+            return True
+        if title:
+            title_lower = title.lower()
+            if "a.l.i.c.e" in title_lower or "jarvis" in title_lower or "mark-xlvii" in title_lower:
+                return True
+        return False
+
     if _OS == "Windows":
         try:
             import win32gui
             import win32process
             import psutil
+            
             hwnd = win32gui.GetForegroundWindow()
-            if hwnd:
-                title = win32gui.GetWindowText(hwnd).strip()
-                try:
-                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
-                    proc = psutil.Process(pid)
-                    proc_name = proc.name()
-                except Exception:
-                    proc_name = "Unknown"
-                return f"Active Window: '{title}' (Process: '{proc_name}')"
+            while hwnd:
+                if win32gui.IsWindowVisible(hwnd):
+                    title = win32gui.GetWindowText(hwnd).strip()
+                    try:
+                        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                    except Exception:
+                        pid = None
+                    
+                    if not is_alice_window(title, pid) and title:
+                        try:
+                            proc = psutil.Process(pid)
+                            proc_name = proc.name()
+                        except Exception:
+                            proc_name = "Unknown"
+                        return f"Active Window: '{title}' (Process: '{proc_name}')"
+                
+                # Move to next window in Z-order (GW_HWNDNEXT = 2)
+                hwnd = win32gui.GetWindow(hwnd, 2)
             return "No foreground window detected."
         except Exception as e:
             return f"Error: {e}"
+            
     elif _OS == "Darwin":
         try:
             cmd = "osascript -e 'tell application \"System Events\" to name of first application process whose frontmost is true'"
@@ -168,23 +183,48 @@ def get_active_window(parameters=None, response=None, player=None, session_memor
                 return f"Active Application: '{res.stdout.strip()}'"
         except Exception as e:
             return f"Error: {e}"
+            
     else:
         try:
-            title_res = subprocess.run(["xdotool", "getactivewindow", "getwindowname"], capture_output=True, text=True, timeout=3)
-            if title_res.returncode == 0:
-                title = title_res.stdout.strip()
-                pid_res = subprocess.run(["xdotool", "getactivewindow", "getwindowpid"], capture_output=True, text=True, timeout=3)
-                pid = pid_res.stdout.strip() if pid_res.returncode == 0 else "?"
-                proc_name = "Unknown"
-                if pid != "?":
-                    try:
-                        comm_path = Path(f"/proc/{pid}/comm")
-                        if comm_path.exists():
-                            proc_name = comm_path.read_text(encoding="utf-8").strip()
-                    except Exception:
-                        pass
-                return f"Active Window: '{title}' (Process: '{proc_name}', PID: {pid})"
+            env = os.environ.copy()
+            if "DISPLAY" not in env:
+                env["DISPLAY"] = ":0"
+                
+            # Get stacking order (bottom to top)
+            res = subprocess.run(["xprop", "-root", "_NET_CLIENT_LIST_STACKING"], capture_output=True, text=True, env=env, timeout=3)
+            if res.returncode == 0:
+                line = res.stdout.strip()
+                if "#" in line:
+                    window_ids = [w.strip() for w in line.split("#")[1].split(",") if w.strip()]
+                    window_ids.reverse() # Go from top (foreground) to bottom
+                    
+                    for wid_str in window_ids:
+                        wid = int(wid_str, 16)
+                        
+                        # Get window title
+                        name_res = subprocess.run(["xdotool", "getwindowname", str(wid)], capture_output=True, text=True, env=env, timeout=2)
+                        title = name_res.stdout.strip() if name_res.returncode == 0 else ""
+                        
+                        # Get window PID
+                        pid_res = subprocess.run(["xdotool", "getwindowpid", str(wid)], capture_output=True, text=True, env=env, timeout=2)
+                        pid = int(pid_res.stdout.strip()) if pid_res.returncode == 0 and pid_res.stdout.strip().isdigit() else None
+                        
+                        if not title:
+                            continue
+                        title_lower = title.lower()
+                        # Ignore system desktop components
+                        if title_lower in ["desktop", "xfce4-panel", "panel", "polybar", "tint2", "gnome-shell"]:
+                            continue
+                            
+                        if not is_alice_window(title, pid):
+                            return f"Active Window: '{title}'"
+            
+            # Fallback if xprop failed
+            res = subprocess.run(["xdotool", "getactivewindow", "getwindowname"], capture_output=True, text=True, env=env, timeout=3)
+            if res.returncode == 0:
+                return f"Active Window: '{res.stdout.strip()}'"
         except Exception:
             pass
+            
     return "Could not determine active window."
 
