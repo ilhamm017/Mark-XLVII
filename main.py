@@ -784,6 +784,21 @@ class JarvisLive:
         self._last_activity_time = time.time()
         self.ui._win.on_wake_requested = self._wake_up
 
+    def get_server_url(self, endpoint: str) -> str:
+        import requests
+        if not hasattr(self, '_resolved_server_host') or self._resolved_server_host is None:
+            self._resolved_server_host = "192.168.0.102:8080"
+            for host in ["192.168.0.102:8080", "100.69.16.104:8080"]:
+                try:
+                    res = requests.get(f"http://{host}/api/hermes/memory?user=ping_test", timeout=1.5)
+                    if res.status_code in (200, 404, 401, 500):
+                        self._resolved_server_host = host
+                        print(f"[Server] Resolved server host to {host}")
+                        break
+                except Exception:
+                    pass
+        return f"http://{self._resolved_server_host}{endpoint}"
+
     def _make_remote_key(self):
         """Called from Qt main thread when user presses Remote Control."""
         if self._dashboard is None:
@@ -835,7 +850,7 @@ class JarvisLive:
                 self.ui.write_log(f"Routing to Hermes: {query}")
                 try:
                     import requests
-                    res = requests.post("http://192.168.0.102:8080/api/hermes/ask", json={"query": query}, timeout=10)
+                    res = requests.post(self.get_server_url("/api/hermes/ask"), json={"query": query}, timeout=10)
                     if res.status_code == 200:
                         res_data = res.json()
                         if res_data.get("status") == "queued":
@@ -909,7 +924,7 @@ class JarvisLive:
 
     async def _poll_hermes_task(self, task_id: str, query: str):
         self.ui.write_log(f"SYS: Started polling task {task_id}")
-        url = f"http://192.168.0.102:8080/api/hermes/task/{task_id}"
+        url = self.get_server_url(f"/api/hermes/task/{task_id}")
         
         await asyncio.sleep(2)
         
@@ -988,7 +1003,7 @@ class JarvisLive:
             pass
 
         try:
-            res = requests.get(f"http://192.168.0.102:8080/api/hermes/memory?user={user_name}", timeout=5)
+            res = requests.get(self.get_server_url(f"/api/hermes/memory?user={user_name}"), timeout=5)
             if res.status_code == 200:
                 mem_str = res.json().get("prompt_string", "")
                 print(f"[Memory] Dynamically loaded Honcho memory for {user_name} from server.")
@@ -1064,7 +1079,7 @@ class JarvisLive:
                     except Exception:
                         pass
                     requests.post(
-                        "http://192.168.0.102:8080/api/hermes/memory/save",
+                        self.get_server_url("/api/hermes/memory/save"),
                         json={"category": category, "key": key, "value": value, "user": user_name},
                         timeout=5
                     )
@@ -1096,7 +1111,7 @@ class JarvisLive:
                         pass
                     try:
                         res = requests.post(
-                            "http://192.168.0.102:8080/api/hermes/ask",
+                            self.get_server_url("/api/hermes/ask"),
                             json={"query": query, "user": user_name},
                             timeout=10
                         )
