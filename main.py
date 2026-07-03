@@ -1123,7 +1123,31 @@ class JarvisLive:
             f"Use this to calculate exact times for reminders.\n\n"
         )
 
-        parts = [time_ctx]
+        import platform
+        import socket as py_socket
+        import getpass
+
+        os_name = platform.system()
+        try:
+            hostname = py_socket.gethostname()
+        except Exception:
+            hostname = "unknown"
+
+        try:
+            username = getpass.getuser()
+        except Exception:
+            username = "unknown"
+
+        env_ctx = (
+            f"[HOST ENVIRONMENT]\n"
+            f"You are currently running directly on the following machine:\n"
+            f"- Operating System: {os_name}\n"
+            f"- Computer Hostname: {hostname}\n"
+            f"- Current OS User: {username}\n"
+            f"Always align all tool parameters, system commands, paths, and interactions with this active environment ({os_name} on {hostname}).\n\n"
+        )
+
+        parts = [time_ctx, env_ctx]
         if mem_str:
             parts.append(mem_str)
         parts.append(sys_prompt)
