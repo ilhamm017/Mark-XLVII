@@ -1,11 +1,23 @@
 import sys
+import os
+
+# Redirect stdout/stderr to run.log if running under pythonw.exe or if stdout is None (no console)
+if sys.executable.lower().endswith("pythonw.exe") or sys.stdout is None:
+    try:
+        # Open in append mode, utf-8, buffering=1 (line buffered)
+        log_file = open("run.log", "a", encoding="utf-8", buffering=1)
+        sys.stdout = log_file
+        sys.stderr = log_file
+    except Exception:
+        pass
+
 # Force stdout/stderr to utf-8 encoding to prevent CP1252/UnicodeEncodeError on Windows
-if hasattr(sys.stdout, 'reconfigure'):
+if sys.stdout is not None and hasattr(sys.stdout, 'reconfigure'):
     try:
         sys.stdout.reconfigure(encoding='utf-8')
     except Exception:
         pass
-if hasattr(sys.stderr, 'reconfigure'):
+if sys.stderr is not None and hasattr(sys.stderr, 'reconfigure'):
     try:
         sys.stderr.reconfigure(encoding='utf-8')
     except Exception:
