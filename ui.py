@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QPushButton, QScrollArea, QSizePolicy, QTextEdit,
     QVBoxLayout, QWidget, QProgressBar, QSystemTrayIcon, QMenu,
+    QDialog, QFormLayout, QCheckBox,
 )
 
 def _base_dir() -> Path:
@@ -862,6 +863,268 @@ class _DropCanvas(QWidget):
             z.mousePressEvent(e)
 
 
+class SettingsWindow(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("A.L.I.C.E — CONFIGURATION PANEL")
+        self.setFixedSize(520, 600)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Dialog
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._drag_pos = None
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        
+        central = QWidget(self)
+        central.setObjectName("settingsCentral")
+        central.setStyleSheet(f"""
+            #settingsCentral {{
+                background: rgba(0, 6, 10, 245);
+                border: 2px solid {C.BORDER};
+                border-radius: 12px;
+            }}
+            QLabel {{
+                color: {C.TEXT_DIM};
+                font-family: 'Courier New';
+                font-size: 11px;
+                background: transparent;
+            }}
+            QLineEdit {{
+                background: #000d12;
+                color: {C.TEXT};
+                border: 1px solid {C.BORDER};
+                border-radius: 3px;
+                padding: 5px 8px;
+                font-family: 'Courier New';
+                font-size: 11px;
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {C.PRI};
+            }}
+            QCheckBox {{
+                color: {C.PRI};
+                font-family: 'Courier New';
+                font-size: 11px;
+                background: transparent;
+            }}
+            QCheckBox::indicator {{
+                width: 14px;
+                height: 14px;
+                border: 1px solid {C.BORDER};
+                background: #000d12;
+                border-radius: 2px;
+            }}
+            QCheckBox::indicator:checked {{
+                background: {C.PRI};
+                border: 1px solid {C.PRI};
+            }}
+            QPushButton {{
+                font-family: 'Courier New';
+                font-size: 11px;
+                font-weight: bold;
+                border-radius: 3px;
+            }}
+        """)
+        main_layout.addWidget(central)
+
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(20, 15, 20, 15)
+        layout.setSpacing(10)
+
+        header = QHBoxLayout()
+        title = QLabel("⚙  A.L.I.C.E. CONFIGURATION PANEL")
+        title.setFont(QFont("Courier New", 12, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {C.PRI};")
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(24, 24)
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_DIM}; border: none; font-size: 14px;
+            }}
+            QPushButton:hover {{ color: {C.RED}; }}
+        """)
+        close_btn.clicked.connect(self.reject)
+        header.addWidget(title)
+        header.addStretch()
+        header.addWidget(close_btn)
+        layout.addLayout(header)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {C.BORDER};")
+        layout.addWidget(sep)
+
+        form = QFormLayout()
+        form.setContentsMargins(0, 5, 0, 5)
+        form.setSpacing(8)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+
+        def _sec_lbl(text):
+            lbl = QLabel(text)
+            lbl.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+            lbl.setStyleSheet(f"color: {C.ACC2}; margin-top: 10px; margin-bottom: 2px;")
+            return lbl
+
+        form.addRow(_sec_lbl("◈ GEMINI LIVE API & PROXY"))
+
+        self.live_model_input = QLineEdit()
+        self.live_model_input.setPlaceholderText("models/gemini-3.1-flash-live-preview")
+        form.addRow("Live Model:", self.live_model_input)
+
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key_input.setPlaceholderText("AIzaSy...")
+        form.addRow("Gemini API Key:", self.api_key_input)
+
+        self.sub2api_url_input = QLineEdit()
+        self.sub2api_url_input.setPlaceholderText("https://sub2api.randompulse.my.id/antigravity")
+        form.addRow("Sub2API Base URL:", self.sub2api_url_input)
+
+        self.sub2api_key_input = QLineEdit()
+        self.sub2api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.sub2api_key_input.setPlaceholderText("API key for sub2api proxy")
+        form.addRow("Sub2API Auth Key:", self.sub2api_key_input)
+
+        form.addRow(_sec_lbl("◈ MODEL CONTEXT PROTOCOL (MCP) SERVERS"))
+
+        self.mcp_browseros_cb = QCheckBox("Enable BrowserOS MCP")
+        self.browseros_url_input = QLineEdit()
+        self.browseros_url_input.setPlaceholderText("http://127.0.0.1:9200/mcp")
+        form.addRow(self.mcp_browseros_cb, self.browseros_url_input)
+        self.mcp_browseros_cb.toggled.connect(self.browseros_url_input.setEnabled)
+
+        self.mcp_vscode_cb = QCheckBox("Enable VS Code MCP")
+        self.vscode_url_input = QLineEdit()
+        self.vscode_url_input.setPlaceholderText("http://127.0.0.1:3017/mcp")
+        form.addRow(self.mcp_vscode_cb, self.vscode_url_input)
+        self.mcp_vscode_cb.toggled.connect(self.vscode_url_input.setEnabled)
+
+        self.mcp_custom_cb = QCheckBox("Enable Custom MCP")
+        self.custom_url_input = QLineEdit()
+        self.custom_url_input.setPlaceholderText("http://127.0.0.1:port/mcp")
+        form.addRow(self.mcp_custom_cb, self.custom_url_input)
+        self.mcp_custom_cb.toggled.connect(self.custom_url_input.setEnabled)
+
+        layout.addLayout(form)
+
+        self._load_current_values()
+
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setStyleSheet(f"color: {C.BORDER};")
+        layout.addWidget(sep2)
+
+        footer = QHBoxLayout()
+        footer.setSpacing(10)
+        
+        cancel_btn = QPushButton("✕  CANCEL")
+        cancel_btn.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        cancel_btn.setFixedHeight(32)
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_DIM};
+                border: 1px solid {C.BORDER};
+            }}
+            QPushButton:hover {{
+                background: rgba(255, 255, 255, 10); color: {C.TEXT}; border: 1px solid {C.BORDER_B};
+            }}
+        """)
+        cancel_btn.clicked.connect(self.reject)
+
+        save_btn = QPushButton("💾  SAVE CONFIGURATIONS")
+        save_btn.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        save_btn.setFixedHeight(32)
+        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        save_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.PRI};
+                border: 1px solid {C.PRI_DIM};
+            }}
+            QPushButton:hover {{
+                background: {C.PRI_GHO}; border: 1px solid {C.PRI};
+            }}
+        """)
+        save_btn.clicked.connect(self._save_values)
+
+        footer.addWidget(cancel_btn, stretch=1)
+        footer.addWidget(save_btn, stretch=2)
+        layout.addLayout(footer)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.MouseButton.LeftButton and self._drag_pos is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+        event.accept()
+
+    def _load_current_values(self):
+        cfg = {}
+        if API_FILE.exists():
+            try:
+                cfg = json.loads(API_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        
+        self.live_model_input.setText(cfg.get("live_model", "models/gemini-3.1-flash-live-preview"))
+        self.api_key_input.setText(cfg.get("gemini_api_key", ""))
+        self.sub2api_url_input.setText(cfg.get("sub2api_base_url", "https://sub2api.randompulse.my.id/antigravity"))
+        self.sub2api_key_input.setText(cfg.get("sub2api_key", ""))
+
+        self.mcp_browseros_cb.setChecked(cfg.get("mcp_enabled_browseros", True))
+        self.browseros_url_input.setText(cfg.get("browseros_mcp_url", "http://127.0.0.1:9200/mcp"))
+        self.browseros_url_input.setEnabled(self.mcp_browseros_cb.isChecked())
+
+        self.mcp_vscode_cb.setChecked(cfg.get("mcp_enabled_vscode", True))
+        self.vscode_url_input.setText(cfg.get("vscode_mcp_url", "http://127.0.0.1:3017/mcp"))
+        self.vscode_url_input.setEnabled(self.mcp_vscode_cb.isChecked())
+
+        self.mcp_custom_cb.setChecked(cfg.get("mcp_custom_enabled", False))
+        self.custom_url_input.setText(cfg.get("mcp_custom_url", ""))
+        self.custom_url_input.setEnabled(self.mcp_custom_cb.isChecked())
+
+    def _save_values(self):
+        cfg = {}
+        if API_FILE.exists():
+            try:
+                cfg = json.loads(API_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        cfg["live_model"] = self.live_model_input.text().strip()
+        cfg["gemini_api_key"] = self.api_key_input.text().strip()
+        cfg["sub2api_base_url"] = self.sub2api_url_input.text().strip()
+        cfg["sub2api_key"] = self.sub2api_key_input.text().strip()
+
+        cfg["mcp_enabled_browseros"] = self.mcp_browseros_cb.isChecked()
+        cfg["browseros_mcp_url"] = self.browseros_url_input.text().strip()
+
+        cfg["mcp_enabled_vscode"] = self.mcp_vscode_cb.isChecked()
+        cfg["vscode_mcp_url"] = self.vscode_url_input.text().strip()
+
+        cfg["mcp_custom_enabled"] = self.mcp_custom_cb.isChecked()
+        cfg["mcp_custom_url"] = self.custom_url_input.text().strip()
+
+        try:
+            API_FILE.write_text(json.dumps(cfg, indent=4), encoding="utf-8")
+            self.accept()
+        except Exception as e:
+            print(f"[Settings] Failed to write config: {e}")
+            self.reject()
+
+
 class SetupOverlay(QWidget):
     done = pyqtSignal(str, str)
 
@@ -1437,6 +1700,9 @@ class MainWindow(QMainWindow):
         self.tray_remote_action = tray_menu.addAction("◉ Remote Control")
         self.tray_remote_action.triggered.connect(self._open_remote)
         
+        self.tray_settings_action = tray_menu.addAction("⚙ Settings")
+        self.tray_settings_action.triggered.connect(self._open_settings)
+        
         tray_menu.addSeparator()
         
         show_action = tray_menu.addAction("Show/Hide Panel")
@@ -1463,6 +1729,11 @@ class MainWindow(QMainWindow):
                 self.tray_interrupt_action.setText("🎙 Interrupt: VOICE VAD (Manual)")
             else:
                 self.tray_interrupt_action.setText("🛑 Interrupt: MANUAL (Voice VAD)")
+
+    def _open_settings(self):
+        dialog = SettingsWindow(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._log.append_log("SYS: Configurations saved. Please restart ALICE for WebSocket/Live API updates to take effect.")
 
     def _toggle_visibility(self):
         screen = QApplication.primaryScreen().availableGeometry()
@@ -1738,6 +2009,19 @@ class MainWindow(QMainWindow):
             return l
 
         lay.addWidget(_badge("MARK XLVII", C.PRI_DIM))
+        
+        settings_btn = QPushButton("⚙")
+        settings_btn.setFixedSize(22, 22)
+        settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        settings_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.PRI_DIM}; border: none; font-size: 13px; font-weight: bold;
+            }}
+            QPushButton:hover {{ color: {C.PRI}; }}
+        """)
+        settings_btn.clicked.connect(self._open_settings)
+        lay.addWidget(settings_btn)
+        
         lay.addStretch()
 
         mid = QVBoxLayout(); mid.setSpacing(1)
