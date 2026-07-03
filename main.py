@@ -979,11 +979,19 @@ class JarvisLive:
 
         # Try to pull synced memory from Armbian server (Honcho)
         mem_str = ""
+        user_name = "ilham"
         try:
-            res = requests.get("http://192.168.0.102:8080/api/hermes/memory", timeout=5)
+            with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                user_name = cfg.get("user_name", "ilham").lower().strip()
+        except Exception:
+            pass
+
+        try:
+            res = requests.get(f"http://192.168.0.102:8080/api/hermes/memory?user={user_name}", timeout=5)
             if res.status_code == 200:
                 mem_str = res.json().get("prompt_string", "")
-                print("[Memory] Dynamically loaded Honcho memory from server.")
+                print(f"[Memory] Dynamically loaded Honcho memory for {user_name} from server.")
         except Exception as e:
             print(f"[Memory] Server connection failed, falling back to local: {e}")
 
@@ -1048,12 +1056,19 @@ class JarvisLive:
                 # Sync with Armbian server (Honcho & Hermes)
                 try:
                     import requests
+                    user_name = "ilham"
+                    try:
+                        with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                            cfg = json.load(f)
+                            user_name = cfg.get("user_name", "ilham").lower().strip()
+                    except Exception:
+                        pass
                     requests.post(
                         "http://192.168.0.102:8080/api/hermes/memory/save",
-                        json={"category": category, "key": key, "value": value},
+                        json={"category": category, "key": key, "value": value, "user": user_name},
                         timeout=5
                     )
-                    print("[Memory] Successfully synced save_memory with server.")
+                    print(f"[Memory] Successfully synced save_memory for {user_name} with server.")
                 except Exception as e:
                     print(f"[Memory] Failed to sync save_memory with server: {e}")
             if not self.ui.muted:
@@ -1072,10 +1087,17 @@ class JarvisLive:
                 
                 def _call_hermes_sync():
                     import requests
+                    user_name = "ilham"
+                    try:
+                        with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                            cfg = json.load(f)
+                            user_name = cfg.get("user_name", "ilham").lower().strip()
+                    except Exception:
+                        pass
                     try:
                         res = requests.post(
                             "http://192.168.0.102:8080/api/hermes/ask",
-                            json={"query": query},
+                            json={"query": query, "user": user_name},
                             timeout=10
                         )
                         if res.status_code == 200:
