@@ -111,6 +111,7 @@ def _ensure_network_access(port: int) -> None:
     # ── Windows ──────────────────────────────────────────────────────────────
     if sys.platform == "win32":
         import ctypes, time
+        _SUBPROCESS_FLAGS = 0x08000000
 
         port_rule = f"JARVIS Dashboard Port {port}"
         prog_rule  = "JARVIS Dashboard Python"
@@ -121,6 +122,7 @@ def _ensure_network_access(port: int) -> None:
                 r = subprocess.run(
                     ["netsh", "advfirewall", "firewall", "show", "rule", f"name={name}"],
                     capture_output=True, text=True, timeout=5,
+                    creationflags=_SUBPROCESS_FLAGS
                 )
                 return r.returncode == 0 and "No rules match" not in r.stdout
             except Exception:
@@ -134,6 +136,7 @@ def _ensure_network_access(port: int) -> None:
                      "Where-Object {$_.NetworkCategory -eq 'Public'} | "
                      "Measure-Object).Count"],
                     capture_output=True, text=True, timeout=6,
+                    creationflags=_SUBPROCESS_FLAGS
                 )
                 return r.stdout.strip() not in ("", "0")
             except Exception:
@@ -183,7 +186,8 @@ def _ensure_network_access(port: int) -> None:
         # ── Try running directly (succeeds when already admin) ────────────────
         try:
             r = subprocess.run(
-                [bat_path], capture_output=True, timeout=8, shell=True
+                [bat_path], capture_output=True, timeout=8, shell=True,
+                creationflags=_SUBPROCESS_FLAGS
             )
             if r.returncode == 0:
                 print(f"[Dashboard] Firewall configured for port {port}.")

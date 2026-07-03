@@ -1,10 +1,14 @@
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+
+_OS = platform.system()
+_SUBPROCESS_FLAGS = 0x08000000 if _OS == "Windows" else 0
 
 def _base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -65,7 +69,11 @@ if not notified:
 if not notified:
     try:
         import subprocess
-        subprocess.run(["msg", "*", "/TIME:30", message], check=False)
+        subprocess.run(
+            ["msg", "*", "/TIME:30", message],
+            check=False,
+            creationflags=_SUBPROCESS_FLAGS
+        )
     except Exception:
         pass
 
@@ -178,6 +186,7 @@ def _schedule_windows(target_dt: datetime, task_name: str,
     result = subprocess.run(
         ["schtasks", "/Create", "/TN", task_name, "/XML", str(xml_path), "/F"],
         capture_output=True, text=True,
+        creationflags=_SUBPROCESS_FLAGS
     )
 
     try:
