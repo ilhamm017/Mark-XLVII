@@ -108,6 +108,8 @@ from actions.game_updater      import game_updater
 from actions.system_monitor    import SystemMonitor, get_system_status
 from actions.ytmusic_control   import ytmusic_control
 from actions.taskbar_manager   import list_taskbar_apps, get_active_window
+from actions.system_control    import system_control
+from actions.hermes_tools      import hermes_tools
 
 
 def get_base_dir():
@@ -962,6 +964,122 @@ TOOL_DECLARATIONS = [
     }
 },
     {
+        "name": "system_control",
+        "description": (
+            "Performs local system operations: running terminal/shell commands, managing processes (listing or killing), "
+            "inspecting workspace/git status, triggering native OS desktop notifications, managing python/system packages, "
+            "and running local network diagnostics (ping, listening ports, network interfaces)."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "tool": {
+                    "type": "STRING",
+                    "description": "The specific operation to run: 'execute_command' | 'manage_process' | 'workspace_info' | 'show_notification' | 'manage_packages' | 'network_diagnostics'"
+                },
+                "command": {
+                    "type": "STRING",
+                    "description": "Required for 'execute_command': the terminal command to run"
+                },
+                "action": {
+                    "type": "STRING",
+                    "description": "Action for sub-tool. E.g. 'list' or 'kill' for manage_process; 'git_status' or 'list_files' for workspace_info; 'install' or 'uninstall' or 'list' for manage_packages; 'interfaces' or 'ping' or 'ports' for network_diagnostics"
+                },
+                "pid": {
+                    "type": "INTEGER",
+                    "description": "Process ID (PID) to terminate/kill"
+                },
+                "name": {
+                    "type": "STRING",
+                    "description": "Process name pattern to terminate/kill"
+                },
+                "path": {
+                    "type": "STRING",
+                    "description": "Workspace/project directory path to inspect"
+                },
+                "title": {
+                    "type": "STRING",
+                    "description": "Title of the notification to display"
+                },
+                "message": {
+                    "type": "STRING",
+                    "description": "Message body of the notification"
+                },
+                "manager": {
+                    "type": "STRING",
+                    "description": "Package manager to use: 'pip' | 'npm' | 'winget' | 'apt'"
+                },
+                "package_name": {
+                    "type": "STRING",
+                    "description": "Name of package/dependencies to install/uninstall"
+                },
+                "target": {
+                    "type": "STRING",
+                    "description": "Network target IP or hostname (for ping)"
+                }
+            },
+            "required": ["tool"]
+        }
+    },
+    {
+        "name": "hermes_tools",
+        "description": (
+            "Hermes-emulated powerful development utilities: paginated file reading (read_file with offset/limit), "
+            "precise code patching (patch_file with old_string/new_string), ripgrep-like file and content searching (search_file_content), "
+            "and clean web/pdf text extraction (web_extract)."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "tool": {
+                    "type": "STRING",
+                    "description": "The specific utility to run: 'read_file' | 'patch_file' | 'search_file_content' | 'web_extract'"
+                },
+                "path": {
+                    "type": "STRING",
+                    "description": "File or folder path to operate on"
+                },
+                "offset": {
+                    "type": "INTEGER",
+                    "description": "1-based line number to start reading from (for read_file)"
+                },
+                "limit": {
+                    "type": "INTEGER",
+                    "description": "Maximum line count to read (for read_file) or max results to return (for search_file_content)"
+                },
+                "old_string": {
+                    "type": "STRING",
+                    "description": "Exact code or text snippet to find (for patch_file)"
+                },
+                "new_string": {
+                    "type": "STRING",
+                    "description": "Replacement text or code (for patch_file)"
+                },
+                "replace_all": {
+                    "type": "BOOLEAN",
+                    "description": "Whether to replace all occurrences of old_string (for patch_file). Default is false."
+                },
+                "pattern": {
+                    "type": "STRING",
+                    "description": "Regex or glob pattern to search for (for search_file_content)"
+                },
+                "target": {
+                    "type": "STRING",
+                    "description": "Search target: 'content' (default, searches inside files) or 'files' (finds file names) (for search_file_content)"
+                },
+                "file_glob": {
+                    "type": "STRING",
+                    "description": "Optional file name filter glob, e.g. '*.py' or '*config*' (for search_file_content)"
+                },
+                "url": {
+                    "type": "STRING",
+                    "description": "Webpage URL to extract markdown/text content from (for web_extract)"
+                }
+            },
+            "required": ["tool"]
+        }
+    },
+    {
         "name": "save_memory",
         "description": (
             "Save an important personal fact about the user to long-term memory. "
@@ -1497,6 +1615,14 @@ class JarvisLive:
                 r = await loop.run_in_executor(None, lambda: flight_finder(parameters=args, player=self.ui))
                 result = r or "Done."
 
+            elif name == "system_control":
+                r = await loop.run_in_executor(None, lambda: system_control(parameters=args, player=self.ui))
+                result = r or "Done."
+
+            elif name == "hermes_tools":
+                r = await loop.run_in_executor(None, lambda: hermes_tools(parameters=args, player=self.ui))
+                result = r or "Done."
+
             elif name == "system_status":
                 r = await loop.run_in_executor(None, get_system_status)
                 result = str(r)
@@ -1517,7 +1643,7 @@ class JarvisLive:
                     "reminder", "youtube_video", "screen_process", "computer_settings",
                     "desktop_control", "code_helper", "dev_agent", "web_search",
                     "file_processor", "computer_control", "game_updater", "flight_finder",
-                    "system_status", "shutdown_alice", "save_memory"
+                    "system_status", "shutdown_alice", "save_memory", "system_control", "hermes_tools"
                 }
                 if name not in builtins:
                     if name in self.vscode_tool_names:

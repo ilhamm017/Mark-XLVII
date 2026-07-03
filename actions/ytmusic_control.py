@@ -138,8 +138,12 @@ class YTMusicAPI:
             current_idx = -1
             if queue_data and isinstance(queue_data, dict) and "items" in queue_data:
                 for idx, item in enumerate(queue_data["items"]):
-                    renderer = item.get("playlistPanelVideoRenderer", {})
-                    if renderer.get("selected"):
+                    renderer = item.get("playlistPanelVideoRenderer")
+                    if not renderer:
+                        wrapper = item.get("playlistPanelVideoWrapperRenderer", {})
+                        primary = wrapper.get("primaryRenderer", {})
+                        renderer = primary.get("playlistPanelVideoRenderer", {})
+                    if renderer and renderer.get("selected"):
                         current_idx = idx
                         break
             
@@ -148,8 +152,36 @@ class YTMusicAPI:
             if not self.add_to_queue(video_id, insert_after_current=insert_after):
                 return False
                 
-            # 3. Switch queue index to play the new song
-            target_idx = current_idx + 1 if insert_after else 0
+            # 3. Poll the queue until the video appears, then switch index
+            import time
+            target_idx = -1
+            for _ in range(5):  # Try up to 5 times (total 1 second max)
+                time.sleep(0.2)
+                fresh_queue = self.get_queue()
+                if fresh_queue and isinstance(fresh_queue, dict) and "items" in fresh_queue:
+                    # Scan queue items for the video_id
+                    for idx, item in enumerate(fresh_queue["items"]):
+                        renderer = item.get("playlistPanelVideoRenderer")
+                        if not renderer:
+                            wrapper = item.get("playlistPanelVideoWrapperRenderer", {})
+                            primary = wrapper.get("primaryRenderer", {})
+                            renderer = primary.get("playlistPanelVideoRenderer", {})
+                        if renderer and renderer.get("videoId") == video_id:
+                            # If insert_after is True, we prefer the one after current_idx
+                            if insert_after and idx <= current_idx:
+                                continue
+                            target_idx = idx
+                            break
+                if target_idx != -1:
+                    break
+            
+            # Fallback if polling didn't find it or was slow
+            if target_idx == -1:
+                if insert_after:
+                    target_idx = current_idx + 1
+                else:
+                    target_idx = len(queue_data.get("items", [])) if queue_data else 0
+            
             if not self.set_queue_index(target_idx):
                 return False
                 
@@ -383,12 +415,50 @@ class YTMusicAPI:
                     
         return parsed_items
 
+def _ensure_app_open() -> str:
+    import socket
+    import time
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(1.0)
+    try:
+        s.connect(("127.0.0.1", 26538))
+        s.close()
+        return "already_open"
+    except (socket.timeout, ConnectionRefusedError, OSError):
+        pass
+
+    print("[YTMusic] YouTube Music Desktop App is not running. Attempting to start it...")
+    try:
+        from actions.open_app import open_app
+        open_app(parameters={"app_name": "YouTube Music"})
+        # Wait up to 15 seconds for the server to start
+        for _ in range(30):
+            time.sleep(0.5)
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.5)
+            try:
+                s.connect(("127.0.0.1", 26538))
+                s.close()
+                print("[YTMusic] YouTube Music Desktop App successfully started.")
+                # Give the app some extra time to load the web interface
+                time.sleep(3.0)
+                return "newly_opened"
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[YTMusic] Failed to launch app: {e}")
+
+    return "failed"
+
 def ytmusic_control(parameters: dict, player=None) -> str:
     params = parameters or {}
     action = params.get("action", "").lower().strip()
     query = params.get("query", "").strip()
     video_id = params.get("video_id", "").strip()
     volume = params.get("volume")
+
+    # Ensure application is running
+    app_status = _ensure_app_open()
 
     # Local host by default for running on Windows PC
     api = YTMusicAPI(host="localhost")
@@ -411,7 +481,18 @@ def ytmusic_control(parameters: dict, player=None) -> str:
                 return f"Playing track with ID {video_id}."
             return "Failed to play track."
         elif query:
-            results = api.search(query)
+            # If the app was newly opened, retry search a few times in case YTMusic is still loading
+            results = None
+            max_attempts = 4 if app_status == "newly_opened" else 1
+            for attempt in range(max_attempts):
+                results = api.search(query)
+                if results:
+                    break
+                if attempt < max_attempts - 1:
+                    print(f"[YTMusic] Search returned no results. Retrying in 2s (attempt {attempt + 1}/{max_attempts})...")
+                    import time
+                    time.sleep(2.0)
+
             if not results:
                 return f"No results found for '{query}' on YouTube Music."
             # Find first item that has an ID and is a song or video
@@ -519,7 +600,13 @@ def ytmusic_control(parameters: dict, player=None) -> str:
             items = q["items"]
             lines = ["YouTube Music Queue:"]
             for idx, item in enumerate(items[:10]):
-                renderer = item.get("playlistPanelVideoRenderer", {})
+                renderer = item.get("playlistPanelVideoRenderer")
+                if not renderer:
+                    wrapper = item.get("playlistPanelVideoWrapperRenderer", {})
+                    primary = wrapper.get("primaryRenderer", {})
+                    renderer = primary.get("playlistPanelVideoRenderer", {})
+                if not renderer:
+                    renderer = {}
                 title_runs = renderer.get("title", {}).get("runs", [])
                 title = title_runs[0].get("text", "Unknown") if title_runs else "Unknown"
                 
