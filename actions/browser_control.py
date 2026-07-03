@@ -936,7 +936,6 @@ def focus_browseros() -> bool:
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
         else:
             win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
-            win32gui.ShowWindow(hwnd, win32con.SW_SHOWNORMAL)
     except Exception:
         pass
 
@@ -947,17 +946,7 @@ def focus_browseros() -> bool:
     except Exception:
         pass
 
-    # 3. Z-Order Force lift (Topmost -> Notopmost)
-    try:
-        win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0, 
-                              win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
-        time.sleep(0.02)
-        win32gui.SetWindowPos(hwnd, win32con.HWND_NOTOPMOST, 0, 0, 0, 0, 
-                              win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
-    except Exception:
-        pass
-
-    # 4. Try to set foreground directly
+    # 3. Try to set foreground directly
     try:
         if win32gui.SetForegroundWindow(hwnd):
             win32gui.SetFocus(hwnd)

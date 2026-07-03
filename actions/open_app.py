@@ -204,24 +204,14 @@ def find_and_focus_window(app_name: str) -> bool:
         except Exception:
             pass
 
-        # 2. Z-Order Force lift (Topmost -> Notopmost)
-        try:
-            win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0, 
-                                  win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
-            time.sleep(0.02)
-            win32gui.SetWindowPos(hwnd, win32con.HWND_NOTOPMOST, 0, 0, 0, 0, 
-                                  win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
-        except Exception:
-            pass
-
-        # 3. SwitchToThisWindow API (Incredibly robust for Alt-Tab simulation)
+        # 2. SwitchToThisWindow API (Incredibly robust for Alt-Tab simulation)
         try:
             ctypes.windll.user32.SwitchToThisWindow(hwnd, True)
             time.sleep(0.05)
         except Exception:
             pass
 
-        # 4. SetForegroundWindow
+        # 3. SetForegroundWindow
         success = False
         try:
             if win32gui.SetForegroundWindow(hwnd):
