@@ -9,6 +9,7 @@ import time
 import psutil
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
+_SUBPROCESS_FLAGS = 0x08000000 if _OS == "Windows" else 0
 
 DEFAULT_THRESHOLDS = {
     "cpu":  90.0,   # %  — fires after _CPU_STREAK consecutive readings
@@ -27,6 +28,7 @@ def _get_gpu_usage() -> float:
         r = subprocess.run(
             ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=2,
+            creationflags=_SUBPROCESS_FLAGS
         )
         if r.returncode == 0:
             vals = [float(v.strip()) for v in r.stdout.strip().split("\n") if v.strip()]
@@ -77,6 +79,7 @@ def _get_cpu_temp() -> float:
                  "(Get-WmiObject MSAcpi_ThermalZoneTemperature "
                  "-Namespace root/wmi).CurrentTemperature"],
                 capture_output=True, text=True, timeout=3,
+                creationflags=_SUBPROCESS_FLAGS
             )
             if r.returncode == 0 and r.stdout.strip():
                 raw = float(r.stdout.strip().split("\n")[0])
