@@ -15,6 +15,10 @@ from typing import Callable, Optional
 
 import numpy as np
 import sounddevice as sd
+from core.audio_utils import (
+    default_output_rate,
+    resample_float32_mono,
+)
 
 
 
@@ -81,7 +85,11 @@ def _play_np(samples, sample_rate: int) -> None:
     """Play float32 mono (or stereo) audio via sounddevice.
     Accepts numpy arrays or PyTorch tensors.
     """
-    sd.play(_to_numpy(samples), sample_rate)
+    target_rate, target_device = default_output_rate()
+    arr = _to_numpy(samples)
+    if sample_rate != target_rate:
+        arr = resample_float32_mono(arr, sample_rate, target_rate)
+    sd.play(arr, target_rate, device=target_device)
     sd.wait()
 
 
@@ -93,8 +101,11 @@ def _play_audio_bytes(audio_bytes: bytes) -> None:
         output_format=miniaudio.SampleFormat.FLOAT32,
         nchannels=1,
     )
+    target_rate, target_device = default_output_rate()
     samples = np.array(decoded.samples, dtype=np.float32)
-    sd.play(samples, decoded.sample_rate)
+    if decoded.sample_rate != target_rate:
+        samples = resample_float32_mono(samples, decoded.sample_rate, target_rate)
+    sd.play(samples, target_rate, device=target_device)
     sd.wait()
 
 

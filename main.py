@@ -41,6 +41,11 @@ from pathlib import Path
 import sounddevice as sd
 from google import genai
 from google.genai import types
+from core.audio_utils import (
+    default_input_rate,
+    default_output_rate,
+    resample_int16_mono,
+)
 
 # --- Sub2API Monkeypatching ---
 _OriginalClient = genai.Client
@@ -875,6 +880,12 @@ class JarvisLive:
         self._sys_monitor   = SystemMonitor()  # persistent cooldown state
         self._last_voice_time = 0.0
         self._play_stream     = None
+        self._mic_input_rate, self._mic_device = default_input_rate()
+        self._playback_rate, self._playback_device = default_output_rate()
+        print(
+            f"[ALICE] Audio configured: mic_rate={self._mic_input_rate} "
+            f"playback_rate={self._playback_rate}"
+        )
         self._turn_count      = 0
         self.mcp_tools        = []
         self._wake_event      = None
@@ -1432,7 +1443,11 @@ class JarvisLive:
                     should_block_mic = True
 
             if not should_block_mic and not self.ui.muted and not self._phone_active:
-                data = indata.tobytes()
+                if self._mic_input_rate != SEND_SAMPLE_RATE:
+                    pcm = resample_int16_mono(indata, self._mic_input_rate, SEND_SAMPLE_RATE)
+                    data = pcm.tobytes()
+                else:
+                    data = indata.tobytes()
                 try:
                     loop.call_soon_threadsafe(
                         self.out_queue.put_nowait,
@@ -1451,7 +1466,8 @@ class JarvisLive:
                 loop.call_soon_threadsafe(self.ui.set_mic_active, True)
                 try:
                     with sd.InputStream(
-                        samplerate=SEND_SAMPLE_RATE,
+                        device=self._mic_device,
+                        samplerate=self._mic_input_rate,
                         channels=CHANNELS,
                         dtype="int16",
                         blocksize=CHUNK_SIZE,
@@ -1591,7 +1607,8 @@ class JarvisLive:
                 if stream is None:
                     try:
                         stream = sd.RawOutputStream(
-                            samplerate=RECEIVE_SAMPLE_RATE,
+                            device=self._playback_device,
+                            samplerate=self._playback_rate,
                             channels=CHANNELS,
                             dtype="int16",
                         )
@@ -1625,6 +1642,10 @@ class JarvisLive:
                             pass
                         
                         self.ui.set_speaking_volume(vol, freq_norm)
+
+                    if self._playback_rate != RECEIVE_SAMPLE_RATE:
+                        chunk_samples = resample_int16_mono(samples, RECEIVE_SAMPLE_RATE, self._playback_rate)
+                        chunk = chunk_samples.tobytes()
 
                     await asyncio.to_thread(stream.write, chunk)
                 except Exception as we:
