@@ -209,8 +209,20 @@ def full_screen():
     else:               pyautogui.press("f11")
 
 def minimize_window():
-    if _OS == "Darwin": pyautogui.hotkey("command", "m")
-    else:               pyautogui.hotkey("win", "down")
+    if _OS == "Darwin":
+        pyautogui.hotkey("command", "m")
+    elif _OS == "Windows":
+        try:
+            import win32gui
+            import win32con
+            hwnd = win32gui.GetForegroundWindow()
+            if hwnd:
+                win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+        except Exception as e:
+            print(f"[Settings] Win32 minimize failed: {e}")
+            pyautogui.hotkey("win", "down")
+    else:
+        pyautogui.hotkey("win", "down")
 
 def maximize_window():
     if _OS == "Darwin":
@@ -219,7 +231,15 @@ def maximize_window():
             'using {control down, command down}'],
             capture_output=True)
     elif _OS == "Windows":
-        pyautogui.hotkey("win", "up")
+        try:
+            import win32gui
+            import win32con
+            hwnd = win32gui.GetForegroundWindow()
+            if hwnd:
+                win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+        except Exception as e:
+            print(f"[Settings] Win32 maximize failed: {e}")
+            pyautogui.hotkey("win", "up")
     else:
         try:
             subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-b", "add,maximized_vert,maximized_horz"],
