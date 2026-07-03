@@ -1296,12 +1296,18 @@ class MainWindow(QMainWindow):
     _user_speak_sig = pyqtSignal(bool)
     _mic_active_sig = pyqtSignal(bool)
     _speak_data_sig = pyqtSignal(float, float)
+    _toggle_vis_sig = pyqtSignal()
+    _toggle_mute_sig = pyqtSignal()
 
     def __init__(self, face_path: str):
         super().__init__()
         self.setWindowTitle("A.L.I.C.E — MARK XLVII")
         self.setMinimumSize(_MIN_W, _MIN_H)
         self.resize(_DEFAULT_W, _DEFAULT_H)
+
+        # Connect internal thread-safe signals
+        self._toggle_vis_sig.connect(self._toggle_visibility)
+        self._toggle_mute_sig.connect(self._toggle_mute)
 
         # Frameless, translucent, stays on top, taskbar hidden
         self.setWindowFlags(
@@ -1528,6 +1534,36 @@ class MainWindow(QMainWindow):
                     print("[UI] ⚠️ Failed to register global hotkey Alt+Scroll Lock.")
             except Exception as e:
                 print(f"[UI] ⚠️ Error registering global hotkeys: {e}")
+        elif platform.system() == "Linux":
+            try:
+                import socket
+                import threading
+                
+                def listen_udp():
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    try:
+                        sock.bind(('127.0.0.1', 9107))
+                    except Exception as e:
+                        print(f"[UI] ⚠️ Failed to bind IPC socket on port 9107: {e}")
+                        return
+                    
+                    print("[UI] Linux IPC socket listening on UDP port 9107 for global shortcut commands.")
+                    while True:
+                        try:
+                            data, _ = sock.recvfrom(1024)
+                            cmd = data.decode('utf-8').strip()
+                            if cmd == 'toggle':
+                                self._toggle_vis_sig.emit()
+                            elif cmd == 'mute':
+                                self._toggle_mute_sig.emit()
+                        except Exception as e:
+                            print(f"[UI] Linux IPC listener error: {e}")
+                            break
+                            
+                self._udp_thread = threading.Thread(target=listen_udp, daemon=True)
+                self._udp_thread.start()
+            except Exception as e:
+                print(f"[UI] ⚠️ Error setting up Linux IPC listener: {e}")
 
     def nativeEvent(self, eventType, message):
         try:
