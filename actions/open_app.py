@@ -2,6 +2,8 @@ import time
 import subprocess
 import platform
 import shutil
+from pathlib import Path
+from configparser import ConfigParser
 
 try:
     import psutil
@@ -10,6 +12,212 @@ except ImportError:
     _PSUTIL = False
 
 _SYSTEM = platform.system()
+
+# ── Desktop file database (Linux) ──────────────────────────────────────────
+_DESKTOP_DB: list[dict] | None = None
+
+_DESKTOP_DIRS = [
+    Path("/usr/share/applications"),
+    Path("/usr/local/share/applications"),
+    Path.home() / ".local" / "share" / "applications",
+    Path.home() / ".local" / "share" / "flatpak" / "exports" / "share" / "applications",
+    Path("/var/lib/flatpak/exports/share/applications"),
+]
+
+
+def _scan_desktop_files(force: bool = False) -> list[dict]:
+    global _DESKTOP_DB
+    if _DESKTOP_DB is not None and not force:
+        return _DESKTOP_DB
+
+    db: list[dict] = []
+    seen_names: set[str] = set()
+
+    for d in _DESKTOP_DIRS:
+        if not d.is_dir():
+            continue
+        for f in sorted(d.iterdir()):
+            if not f.name.endswith(".desktop"):
+                continue
+            try:
+                cp = ConfigParser(strict=False, interpolation=None)
+                cp.read_string(f.read_text(encoding="utf-8", errors="ignore"))
+                entry = {}
+                if cp.has_section("Desktop Entry"):
+                    for k, v in cp.items("Desktop Entry"):
+                        entry[k] = v
+
+                name = (entry.get("name", "") or "").strip()
+                exec_line = (entry.get("exec", "") or "").strip()
+                if not name or not exec_line:
+                    continue
+
+                generic = (entry.get("genericname", "") or "").strip()
+                keywords_raw = (entry.get("keywords", "") or "").strip()
+                categories = (entry.get("categories", "") or "").strip()
+                no_display = entry.get("nodisplay", "false").lower() in ("true", "1")
+
+                if no_display or name.lower() in seen_names:
+                    continue
+                if name.lower().startswith("quit ") or name.lower().startswith("open a new"):
+                    continue
+
+                seen_names.add(name.lower())
+                db.append({
+                    "name": name,
+                    "generic_name": generic,
+                    "keywords": [k.strip() for k in keywords_raw.split(";") if k.strip()],
+                    "categories": [c.strip() for c in categories.split(";") if c.strip()],
+                    "exec": exec_line,
+                    "desktop_file": f.stem,
+                })
+            except Exception:
+                continue
+
+    _DESKTOP_DB = db
+    print(f"[open_app] Desktop DB: indexed {len(db)} applications")
+    return db
+
+
+def _match_desktop(query: str) -> dict | None:
+    q = query.lower().strip()
+    db = _scan_desktop_files()
+    if not db:
+        return None
+
+    # 1) Exact match on Name
+    for app in db:
+        if app["name"].lower() == q:
+            return app
+
+    # 2) Exact match on desktop file stem
+    for app in db:
+        if app["desktop_file"].lower() == q:
+            return app
+
+    # 3) Exact match on GenericName
+    for app in db:
+        if app["generic_name"].lower() == q:
+            return app
+
+    # 4) query is a substring of Name (longer query = more weight)
+    candidates = []
+    for app in db:
+        nl = app["name"].lower()
+        if q in nl:
+            candidates.append((len(nl) - len(q), app))
+    if candidates:
+        candidates.sort()
+        return candidates[0][1]
+
+    # 5) query is a substring of GenericName
+    candidates = []
+    for app in db:
+        gl = app["generic_name"].lower()
+        if gl and q in gl:
+            candidates.append((len(gl) - len(q), app))
+    if candidates:
+        candidates.sort()
+        return candidates[0][1]
+
+    # 6) query matches a keyword
+    for app in db:
+        for kw in app["keywords"]:
+            if q == kw.lower():
+                return app
+
+    # 7) substring match on keywords
+    candidates = []
+    for app in db:
+        for kw in app["keywords"]:
+            kl = kw.lower()
+            if q in kl:
+                candidates.append((len(kl) - len(q), app))
+    if candidates:
+        candidates.sort()
+        return candidates[0][1]
+
+    return None
+
+
+def _launch_desktop(app: dict) -> bool:
+    desktop_name = app["desktop_file"]
+    # Prefer gtk-launch (uses .desktop file)
+    if shutil.which("gtk-launch"):
+        try:
+            r = subprocess.run(
+                ["gtk-launch", desktop_name],
+                capture_output=True, timeout=5
+            )
+            if r.returncode == 0:
+                return True
+        except Exception:
+            pass
+
+    # Fallback: parse Exec line and run
+    exec_line = app["exec"]
+    # Remove field codes like %f, %F, %u, %U, %i, %c, %k
+    import re
+    exec_cleaned = re.sub(r"%[fFuUick]", "", exec_line).strip()
+    import shlex
+    try:
+        cmd_list = shlex.split(exec_cleaned)
+        subprocess.Popen(cmd_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.5)
+        return True
+    except Exception:
+        pass
+
+    return False
+
+
+def list_installed_apps(category: str = "", query: str = "") -> str:
+    db = _scan_desktop_files()
+
+    if not db:
+        return "No installed applications found (could not read .desktop files)."
+
+    filtered = db
+    if category:
+        cat_lower = category.lower()
+        filtered = [
+            a for a in filtered
+            if any(cat_lower in c.lower() for c in a["categories"])
+        ]
+    if query:
+        q = query.lower()
+        filtered = [
+            a for a in filtered
+            if q in a["name"].lower()
+            or q in a["generic_name"].lower()
+            or any(q in k.lower() for k in a["keywords"])
+        ]
+
+    if not filtered:
+        msg = "No applications"
+        if category:
+            msg += f" in category '{category}'"
+        if query:
+            msg += f" matching '{query}'"
+        return msg + "."
+
+    grouped: dict[str, list[str]] = {}
+    for app in filtered:
+        cat = (app["categories"] or ["Other"])[0]
+        grouped.setdefault(cat, []).append(app["name"])
+
+    lines = [f"Installed applications ({len(filtered)} found):"]
+    for cat in sorted(grouped):
+        apps = sorted(grouped[cat])
+        lines.append(f"  [{cat}]")
+        for name in apps:
+            lines.append(f"    • {name}")
+
+    if len(lines) > 100:
+        lines = lines[:98]
+        lines.append(f"  ... and {len(filtered) - 98} more.")
+
+    return "\n".join(lines)
 
 _APP_ALIASES: dict[str, dict[str, str]] = {
 
@@ -86,28 +294,47 @@ def find_and_focus_window(app_name: str) -> bool:
             if res.returncode != 0:
                 return False
             app_name_lower = app_name.lower().strip()
-            keyword_map = {
-                "code": "visual studio code",
-                "vscode": "visual studio code",
-                "chrome": "chrome",
-                "google-chrome": "chrome",
-                "chromium-browser": "chromium",
-                "firefox": "firefox",
-                "spotify": "spotify",
-                "terminal": "terminal",
-                "whatsapp": "whatsapp",
-                "telegram": "telegram",
-                "discord": "discord",
-            }
-            search_keyword = keyword_map.get(app_name_lower, app_name_lower)
-            for line in res.stdout.splitlines():
-                parts = line.split(None, 3)
-                if len(parts) >= 4:
-                    window_title = parts[3].lower()
-                    if search_keyword in window_title:
-                        window_id = parts[0]
-                        subprocess.run(["wmctrl", "-i", "-a", window_id])
-                        return True
+
+            # Build keyword from desktop DB + binary name
+            search_keywords = [app_name_lower]
+            matched = _match_desktop(app_name)
+            if matched:
+                search_keywords.append(matched["name"].lower())
+                for kw in matched["keywords"]:
+                    search_keywords.append(kw.lower())
+                exec_name = matched["exec"].split("/")[-1].split()[0].lower().replace("%f", "").replace("%u", "").strip()
+                if exec_name:
+                    search_keywords.append(exec_name)
+
+            # Also try xdotool if wmctrl fails
+            has_xdotool = shutil.which("xdotool")
+
+            for keyword in search_keywords:
+                # Try wmctrl first
+                for line in res.stdout.splitlines():
+                    parts = line.split(None, 3)
+                    if len(parts) >= 4:
+                        window_title = parts[3].lower()
+                        if keyword and keyword in window_title:
+                            window_id = parts[0]
+                            subprocess.run(["wmctrl", "-i", "-a", window_id])
+                            return True
+
+                # Try xdotool search as fallback
+                if has_xdotool:
+                    try:
+                        xd_res = subprocess.run(
+                            ["xdotool", "search", "--name", f"--{keyword}",
+                             "--class", f"--{keyword}", "--limit", "1"],
+                            capture_output=True, text=True, timeout=3
+                        )
+                        if xd_res.returncode == 0 and xd_res.stdout.strip():
+                            wid = xd_res.stdout.strip().split()[0]
+                            subprocess.run(["xdotool", "windowactivate", wid])
+                            return True
+                    except Exception:
+                        pass
+
         except Exception as e:
             print(f"[open_app] Linux focus window check failed: {e}")
         return False
@@ -341,13 +568,32 @@ def _launch_macos(app_name: str) -> bool:
 
 
 def _launch_linux(app_name: str) -> bool:
+    import os
     name_lower = app_name.lower().strip()
-    if name_lower in ["chrome", "google-chrome", "google-chrome-stable", "browser", "browseros", "chromium", "chromium-browser"]:
+
+    # ── 1) Search desktop database first ────────────────────────────────────
+    matched = _match_desktop(app_name)
+    if matched:
+        print(f"[open_app] Found in desktop DB: '{matched['name']}' ({matched['desktop_file']}.desktop)")
+        if _launch_desktop(matched):
+            print(f"[open_app] ✅ Launched via desktop: {matched['name']}")
+            return True
+        else:
+            print(f"[open_app] Desktop launch failed for '{matched['name']}', falling back...")
+
+    # ── 2) Browser alias resolution ─────────────────────────────────────────
+    if name_lower in ["chrome", "google-chrome", "google-chrome-stable", "browser", "chromium", "chromium-browser"]:
         for alt in ["chromium-browser", "google-chrome", "google-chrome-stable", "chromium", "firefox", "brave", "brave-browser"]:
-            if shutil.which(alt):
+            path = shutil.which(alt)
+            if path:
+                if path in ["/usr/bin/chromium-browser", "/usr/bin/chromium"] and not os.path.exists("/snap/bin/chromium"):
+                    continue
+                if path == "/usr/bin/firefox" and not os.path.exists("/snap/bin/firefox"):
+                    continue
                 app_name = alt
                 break
 
+    # ── 3) Binary lookup ────────────────────────────────────────────────────
     binary = (
         shutil.which(app_name) or
         shutil.which(app_name.lower()) or
@@ -355,37 +601,56 @@ def _launch_linux(app_name: str) -> bool:
         shutil.which(app_name.lower().replace(" ", "_"))
     )
     if binary:
+        if binary in ["/usr/bin/chromium-browser", "/usr/bin/chromium"] and not os.path.exists("/snap/bin/chromium"):
+            binary = None
+        elif binary == "/usr/bin/firefox" and not os.path.exists("/snap/bin/firefox"):
+            binary = None
+
+    if binary:
         try:
-            subprocess.Popen(
+            p = subprocess.Popen(
                 [binary],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
-            time.sleep(1.0)
-            return True
-        except Exception:
+            time.sleep(1.5)
+            if p.poll() is not None and p.returncode != 0:
+                print(f"[open_app] ❌ Binary {binary} exited immediately with code {p.returncode}")
+            else:
+                return True
+        except Exception as e:
+            print(f"[open_app] ❌ Failed to execute {binary}: {e}")
             pass
 
+    # ── 4) xdg-open fallback ───────────────────────────────────────────────
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["xdg-open", app_name],
             capture_output=True, timeout=5
         )
-        return True
+        if result.returncode == 0:
+            time.sleep(1.0)
+            return True
     except Exception:
         pass
 
-    for desktop_name in [
-        app_name.lower(),
-        app_name.lower().replace(" ", "-"),
-        app_name.lower().replace(" ", ""),
-    ]:
+    # ── 5) gtk-launch with various name guesses ────────────────────────────
+    if matched:
+        guesses = [matched["desktop_file"]]
+    else:
+        guesses = [
+            app_name.lower(),
+            app_name.lower().replace(" ", "-"),
+            app_name.lower().replace(" ", ""),
+        ]
+    for desktop_name in guesses:
         try:
             result = subprocess.run(
                 ["gtk-launch", desktop_name],
                 capture_output=True, timeout=5
             )
             if result.returncode == 0:
+                time.sleep(0.5)
                 return True
         except Exception:
             pass
@@ -414,27 +679,43 @@ def open_app(
     if launcher is None:
         return f"Unsupported operating system: {_SYSTEM}"
 
-    # Redirect web browser app launch to BrowserOS if it is running
-    browseros_running = False
-    if _SYSTEM == "Windows":
+    # Specialized handler for BrowserOS to prevent duplicate launches and handle health check sync
+    app_name_lower = app_name.lower().strip()
+    if app_name_lower == "browseros":
         try:
-            import urllib.request
-            with urllib.request.urlopen("http://127.0.0.1:9200/health", timeout=1) as resp:
-                browseros_running = (resp.status == 200)
-        except Exception:
-            pass
+            from actions.browser_control import _is_browseros_running, focus_browseros, launch_browseros
+            if _is_browseros_running():
+                if focus_browseros():
+                    return "BrowserOS is already running. Focused BrowserOS window."
+                return "BrowserOS is already running."
+            if launch_browseros():
+                time.sleep(1.0)
+                if focus_browseros():
+                    return "Launched and focused BrowserOS."
+                return "Launched BrowserOS."
+            return "Failed to launch BrowserOS."
+        except Exception as e:
+            print(f"[open_app] BrowserOS specialized handler error: {e}")
 
+    # Redirect browser app launches to BrowserOS (launch if needed)
     app_name_lower = app_name.lower().strip()
     is_browser_app = app_name_lower in ["chrome", "google chrome", "browser", "browseros", "edge", "msedge", "firefox", "brave", "opera", "operagx"]
 
-    if browseros_running and is_browser_app:
-        print(f"[open_app] BrowserOS is running. Redirecting '{app_name}' request to BrowserOS focus.")
+    if is_browser_app:
         try:
-            from actions.browser_control import focus_browseros
-            if focus_browseros():
-                return "BrowserOS is already running. Focused BrowserOS window."
+            from actions.browser_control import _is_browseros_running, focus_browseros, launch_browseros
+            if _is_browseros_running():
+                if focus_browseros():
+                    return "BrowserOS is already running. Focused BrowserOS window."
+                return "BrowserOS is already running."
+            if launch_browseros():
+                time.sleep(1.0)
+                if focus_browseros():
+                    return "Launched and focused BrowserOS."
+                return "Launched BrowserOS."
+            print(f"[open_app] Failed to launch BrowserOS, falling through to normal launch for '{app_name}'.")
         except Exception as e:
-            print(f"[open_app] Failed to focus BrowserOS: {e}")
+            print(f"[open_app] BrowserOS redirect error: {e}")
 
     normalized = _normalize(app_name)
     print(f"[open_app] Launching: '{app_name}' → '{normalized}' ({_SYSTEM})")

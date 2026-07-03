@@ -20,13 +20,14 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import (
     QBrush, QColor, QDragEnterEvent, QDropEvent, QFont, QFontDatabase,
     QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap,
-    QRadialGradient, QShortcut, QIcon,
+    QRadialGradient, QShortcut, QIcon, QSurfaceFormat,
 )
+from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QPushButton, QScrollArea, QSizePolicy, QTextEdit,
     QVBoxLayout, QWidget, QProgressBar, QSystemTrayIcon, QMenu,
-    QDialog, QFormLayout, QCheckBox,
+    QDialog, QFormLayout, QCheckBox, QComboBox,
 )
 
 def _base_dir() -> Path:
@@ -94,7 +95,7 @@ class _SysMetrics:
                 self._update()
             except Exception:
                 pass
-            time.sleep(1.5)
+            time.sleep(5.0)
 
     def _update(self):
         cpu = psutil.cpu_percent(interval=None)
@@ -246,12 +247,19 @@ class _SysMetrics:
 
 _metrics = _SysMetrics()
 
-class HudCanvas(QWidget):
+class HudCanvas(QOpenGLWidget):
     def __init__(self, face_path: str, parent=None):
+        # Request OpenGL format with alpha channel + MSAA before super().__init__
+        fmt = QSurfaceFormat()
+        fmt.setAlphaBufferSize(8)   # Transparansi
+        fmt.setSamples(4)           # MSAA 4x — antialiasing di GPU
+        fmt.setSwapInterval(1)      # VSync
         super().__init__(parent)
+        self.setFormat(fmt)
         self.setMinimumSize(300, 300)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop)
 
         self.muted    = False
         self.speaking = False
@@ -272,16 +280,24 @@ class HudCanvas(QWidget):
         self._scan       = 0.0
         self._scan2      = 180.0
         self._rings      = [0.0, 120.0, 240.0]
-        self._pulses: list[float] = [0.0, 50.0, 100.0]
+        self._listen_blink_phase: float = 0.0   # fase sin untuk lingkaran luar berkedip
+        self._tick_rot: float = 0.0              # rotasi tick marks saat THINKING
         self._blink      = True
         self._blink_tick = 0
         self._particles: list[list[float]] = []
         self._face_px: QPixmap | None = None
+        self._face_px_cached: QPixmap | None = None   # Cached scaled version
+        self._face_px_cached_sz: int = -1             # Size it was cached at
         self._load_face(face_path)
 
         self._tmr = QTimer(self)
         self._tmr.timeout.connect(self._step)
-        self._tmr.start(16)
+        self._tmr.start(16)   # Default 60 FPS, diturunkan dinamis saat idle
+
+    def ensure_running(self):
+        """Pastikan canvas timer aktif — dipanggil saat ada aktivitas suara atau fade in/out."""
+        if not self._tmr.isActive():
+            self._tmr.start(16)
 
     def mousePressEvent(self, event):
         if hasattr(self, 'on_clicked') and self.on_clicked:
@@ -310,7 +326,23 @@ class HudCanvas(QWidget):
         
         # Cek apakah sedang berpikir/memproses
         is_thinking = self.state in ("THINKING", "PROCESSING")
-        
+
+        # 60 FPS hanya saat ALICE berbicara, berpikir, atau user SEDANG berbicara.
+        # LISTENING hening (mic aktif tapi tidak ada suara) → 15 FPS → hemat CPU signifikan.
+        active = self.speaking or is_thinking or self.user_speaking
+
+        # Ambil opasitas parent window
+        parent_opacity = 1.0
+        p = self.parent()
+        if p and hasattr(p, "_current_opacity"):
+            parent_opacity = p._current_opacity
+
+        # Jika opasitas sudah stabil di idle (≤ 0.045) dan tidak ada aktivitas suara,
+        # matikan timer sepenuhnya → 0% CPU sampai ada event yang memanggil ensure_running()
+        if parent_opacity <= 0.045 and not active:
+            self._tmr.stop()
+            return
+
         # smooth vol & freq
         vol = getattr(self, "speaking_volume", 0.0) if self.speaking else 0.0
         freq = getattr(self, "speaking_frequency", 0.5) if self.speaking else 0.5
@@ -318,17 +350,22 @@ class HudCanvas(QWidget):
         self._smooth_freq += (freq - self._smooth_freq) * 0.12
         
         if self.speaking:
-            self._tgt_scale = 1.0 + self._smooth_vol * 0.03
-            self._tgt_halo  = 40.0 + self._smooth_vol * 110.0
+            self._tgt_scale = 1.0 + self._smooth_vol * 0.04   # 1.0 – 1.04, selalu ≥ idle
+            self._tgt_halo  = 40.0 + self._smooth_vol * 120.0
         else:
             now = time.time()
             if now - self._last_t > 0.5:
                 if self.muted:
-                    self._tgt_scale = random.uniform(0.998, 1.002)
+                    self._tgt_scale = random.uniform(0.992, 0.997)
                     self._tgt_halo  = random.uniform(15, 28)
+                elif is_thinking:
+                    # THINKING: lebih terang dari idle, mendekati opacity bicara
+                    self._tgt_scale = random.uniform(0.998, 1.004)
+                    self._tgt_halo  = random.uniform(80, 115)
                 else:
-                    self._tgt_scale = random.uniform(1.001, 1.008)
-                    self._tgt_halo  = random.uniform(48, 68)
+                    # IDLE / LISTENING: lebih kecil dari speaking agar transisi jelas
+                    self._tgt_scale = random.uniform(0.988, 0.996)
+                    self._tgt_halo  = random.uniform(38, 55)
                 self._last_t = now
 
         sp = 0.45 if self.speaking else 0.15
@@ -337,9 +374,10 @@ class HudCanvas(QWidget):
 
         # Efek putar HANYA aktif saat berpikir (THINKING / PROCESSING)
         if is_thinking:
-            speeds = [1.6, -1.1, 2.4]  # Putaran sedikit dipercepat agar indikator berpikir lebih aktif
+            speeds = [1.6, -1.1, 2.4]
             scan_spd = 3.2
             scan2_spd = -2.0
+            self._tick_rot = (self._tick_rot + 0.7) % 360   # tick marks berputar saat THINKING
         else:
             speeds = [0.0, 0.0, 0.0]
             scan_spd = 0.0
@@ -352,14 +390,13 @@ class HudCanvas(QWidget):
         self._scan2 = (self._scan2 + scan2_spd) % 360
 
         fw  = min(self.width(), self.height())
-        lim = fw * 0.35
+
+        # Lingkaran luar berkedip: advance fase sin saat LISTENING
+        # Di 5 FPS (200ms/tick), 0.25 rad/tick → satu siklus penuh ~25 tick ≈ 5 detik (lambat, elegan)
         if self.state == "LISTENING" and not self.muted:
-            spd = 2.0
-            self._pulses = [r + spd for r in self._pulses if r + spd < lim]
-            if len(self._pulses) < 3 and random.random() < 0.025:
-                self._pulses.append(0.0)
+            self._listen_blink_phase = (self._listen_blink_phase + 0.25) % (2 * math.pi)
         else:
-            self._pulses = []
+            self._listen_blink_phase = 0.0
 
         if self.speaking and random.random() < 0.28:
             cx, cy = self.width() / 2, self.height() / 2
@@ -380,11 +417,25 @@ class HudCanvas(QWidget):
         if self._blink_tick >= 38:
             self._blink = not self._blink
             self._blink_tick = 0
+
+        # Dynamic FPS: 60 FPS saat aktif (speaking/thinking/user berbicara),
+        # 5 FPS saat idle/listening hening — hemat CPU, animasi napas masih terlihat.
+        # Timer berhenti total saat opacity ≤ 0.045 (kode di atas).
+        target_interval = 16 if active else 200
+        if self._tmr.interval() != target_interval:
+            self._tmr.setInterval(target_interval)
+
         self.update()
 
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Wajib dibersihkan dulu dengan warna transparan agar background QOpenGLWidget
+        # tidak jadi hitam solid — ini yang menjaga overlay tetap transparan.
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        p.fillRect(self.rect(), Qt.GlobalColor.transparent)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
         W, H = self.width(), self.height()
         cx, cy = W / 2, H / 2
@@ -420,11 +471,14 @@ class HudCanvas(QWidget):
             p.drawEllipse(QRectF(cx - r, cy - r, r * 2, r * 2))
 
         # pulse rings
-        for pr in self._pulses:
-            a   = max(0, int(230 * (1.0 - pr / (fw * 0.35))))
-            col = qcol(base_col, a)
-            p.setPen(QPen(col, 1.5)); p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawEllipse(QRectF(cx - pr, cy - pr, pr * 2, pr * 2))
+        # Lingkaran luar berkedip saat LISTENING (pengganti expanding pulse rings)
+        # Satu operasi drawEllipse dengan alpha berdenyut — jauh lebih ringan di CPU
+        if self.state == "LISTENING" and not self.muted:
+            blink_a = int(180 * abs(math.sin(self._listen_blink_phase)))
+            blink_r = sfw * 0.56
+            col = qcol(base_col, blink_a)
+            p.setPen(QPen(col, 2.0)); p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(QRectF(cx - blink_r, cy - blink_r, blink_r * 2, blink_r * 2))
 
         # spinning arc rings
         vol = getattr(self, "_smooth_vol", 0.0)
@@ -468,22 +522,61 @@ class HudCanvas(QWidget):
         srect2 = QRectF(cx - sr2, cy - sr2, sr2 * 2, sr2 * 2)
         p.drawArc(srect2, int(self._scan2 * 16), int(ex * 16))
 
-        # tick marks
-        t_out, t_in = sfw * 0.455, sfw * 0.435
-        p.setPen(QPen(qcol(base_col, 140), 1))
-        for deg in range(0, 360, 10):
-            rad = math.radians(deg)
-            inn = t_in if deg % 30 == 0 else t_in + 6
-            t_out_cur = t_out
-            t_in_cur = inn
+        # ── Tick marks — 3 layer berlapis, semua pakai state yang sama ──────────
+        #   LISTENING : seluruh layer berkedip sinkron (alpha berdenyut)
+        #   THINKING  : seluruh layer berputar sinkron (_tick_rot)
+        #   SPEAKING  : seluruh layer bergelombang (amplitude berbeda per layer)
+        #   IDLE      : statis dengan kedalaman visual dari 3 radius berbeda
+
+        blink = abs(math.sin(self._listen_blink_phase)) \
+                if (self.state == "LISTENING" and not self.muted) else 1.0
+
+        # Layer B — paling luar, hanya di setiap 30° (12 aksen tebal & terang)
+        b_out, b_in = sfw * 0.492, sfw * 0.468
+        p.setPen(QPen(qcol(base_col, int(210 * blink)), 1.5))
+        for deg in range(0, 360, 30):
+            actual_deg = (deg + self._tick_rot) % 360
+            rad = math.radians(actual_deg)
+            bo, bi = b_out, b_in
             if self.speaking:
-                cycles = 3.0 + freq * 5.0
-                wave = math.sin(rad * cycles + self._tick * 0.05) * (vol * sfw * 0.015)
-                t_out_cur += wave
-                t_in_cur += wave
+                wave = math.sin(rad * (3.0 + freq * 5.0) + self._tick * 0.05) * (vol * sfw * 0.020)
+                bo += wave; bi += wave
             p.drawLine(
-                QPointF(cx + t_out_cur * math.cos(rad), cy - t_out_cur * math.sin(rad)),
-                QPointF(cx + t_in_cur  * math.cos(rad), cy - t_in_cur  * math.sin(rad)),
+                QPointF(cx + bo * math.cos(rad), cy - bo * math.sin(rad)),
+                QPointF(cx + bi * math.cos(rad), cy - bi * math.sin(rad)),
+            )
+
+        # Layer A — tengah, setiap 10°, panjang bervariasi di 30° (36 garis utama)
+        a_out, a_in = sfw * 0.455, sfw * 0.435
+        p.setPen(QPen(qcol(base_col, int(155 * blink)), 1))
+        for deg in range(0, 360, 10):
+            actual_deg = (deg + self._tick_rot) % 360
+            rad = math.radians(actual_deg)
+            inn = a_in if deg % 30 == 0 else a_in + 6
+            ao, ai = a_out, inn
+            if self.speaking:
+                wave = math.sin(rad * (3.0 + freq * 5.0) + self._tick * 0.05) * (vol * sfw * 0.015)
+                ao += wave; ai += wave
+            p.drawLine(
+                QPointF(cx + ao * math.cos(rad), cy - ao * math.sin(rad)),
+                QPointF(cx + ai * math.cos(rad), cy - ai * math.sin(rad)),
+            )
+
+        # Layer C — paling dalam, sangat pendek, setiap 5° (hanya yang bukan kelipatan 10°)
+        c_out, c_in = sfw * 0.422, sfw * 0.416
+        p.setPen(QPen(qcol(base_col, int(75 * blink)), 1))
+        for deg in range(0, 360, 5):
+            if deg % 10 == 0:
+                continue   # hindari double-draw dengan layer A
+            actual_deg = (deg + self._tick_rot) % 360
+            rad = math.radians(actual_deg)
+            co, ci = c_out, c_in
+            if self.speaking:
+                wave = math.sin(rad * (3.0 + freq * 5.0) + self._tick * 0.05) * (vol * sfw * 0.008)
+                co += wave; ci += wave
+            p.drawLine(
+                QPointF(cx + co * math.cos(rad), cy - co * math.sin(rad)),
+                QPointF(cx + ci * math.cos(rad), cy - ci * math.sin(rad)),
             )
 
         # crosshair
@@ -494,15 +587,17 @@ class HudCanvas(QWidget):
         p.drawLine(QPointF(cx, cy - ch_r), QPointF(cx, cy - gap_h))
         p.drawLine(QPointF(cx, cy + gap_h), QPointF(cx, cy + ch_r))
 
-        # face
+        # face — gunakan cache agar tidak rescale tiap frame (hemat CPU signifikan)
         if self._face_px:
-            fsz    = int(sfw * 0.62)
-            scaled = self._face_px.scaled(
-                fsz, fsz,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            p.drawPixmap(int(cx - fsz / 2), int(cy - fsz / 2), scaled)
+            fsz = int(sfw * 0.62)
+            if self._face_px_cached is None or self._face_px_cached_sz != fsz:
+                self._face_px_cached = self._face_px.scaled(
+                    fsz, fsz,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                self._face_px_cached_sz = fsz
+            p.drawPixmap(int(cx - fsz / 2), int(cy - fsz / 2), self._face_px_cached)
         else:
             orb_r = int(sfw * 0.27)
             if self.speaking:
@@ -515,7 +610,13 @@ class HudCanvas(QWidget):
             p.setBrush(QBrush(grad))
             p.setPen(Qt.PenStyle.NoPen)
             p.drawEllipse(QRectF(cx - orb_r, cy - orb_r, orb_r * 2, orb_r * 2))
-            p.setPen(QPen(qcol(base_col, min(255, int(self._halo * 2))), 1))
+
+            # Teks A.L.I.C.E — saat LISTENING ikut berdenyut; state lain tetap normal
+            if self.state == "LISTENING" and not self.muted:
+                text_a = int(255 * abs(math.sin(self._listen_blink_phase)))
+            else:
+                text_a = min(255, int(self._halo * 2))
+            p.setPen(QPen(qcol(base_col, text_a), 1))
             p.setFont(QFont("Courier New", 13, QFont.Weight.Bold))
             p.drawText(QRectF(cx - 80, cy - 14, 160, 28),
                        Qt.AlignmentFlag.AlignCenter, "A.L.I.C.E")
@@ -584,11 +685,13 @@ class MetricBar(QWidget):
         p.drawText(QRectF(0, 4, W - 6, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._text)
 
 class LogWidget(QTextEdit):
-    _sig = pyqtSignal(str)
+    _sig        = pyqtSignal(str)
+    file_dropped = pyqtSignal(str)   # emitted when a file is dropped onto the chat log
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setReadOnly(True)
+        self.setAcceptDrops(True)
         self.setFont(QFont("Courier New", 9))
         self.setStyleSheet(f"""
             QTextEdit {{
@@ -668,6 +771,29 @@ class LogWidget(QTextEdit):
             self.setTextCursor(cur)
             self.ensureCursorVisible()
             QTimer.singleShot(20, self._next)
+
+    # ── drag-and-drop file support ─────────────────────────────────────────
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if urls:
+            path = urls[0].toLocalFile()
+            if path and Path(path).is_file():
+                self.file_dropped.emit(path)
+                event.acceptProposedAction()
+                return
+        super().dropEvent(event)
 
 _FILE_ICONS = {
     "image":   ("🖼", "#00d4ff"), "video":   ("🎬", "#ff6b00"),
@@ -863,6 +989,159 @@ class _DropCanvas(QWidget):
             z.mousePressEvent(e)
 
 
+# ── AI Results panel ────────────────────────────────────────────────────────
+class _ResultCard(QWidget):
+    """Single search-result card shown inside ResultsPanel."""
+
+    def __init__(self, title: str, body: str, ts: str, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(f"""
+            QWidget {{
+                background: {C.DARK};
+                border: 1px solid {C.BORDER};
+                border-radius: 4px;
+            }}
+        """)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(7, 5, 7, 5)
+        lay.setSpacing(3)
+
+        # ── header row ───────────────────────────────────────────────────
+        hdr = QHBoxLayout(); hdr.setSpacing(4)
+
+        dot = QLabel("◈")
+        dot.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        dot.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        hdr.addWidget(dot)
+
+        t_lbl = QLabel(title[:46])
+        t_lbl.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        t_lbl.setStyleSheet(f"color: {C.PRI}; background: transparent; letter-spacing: 0.5px;")
+        hdr.addWidget(t_lbl, stretch=1)
+
+        ts_lbl = QLabel(ts)
+        ts_lbl.setFont(QFont("Courier New", 7))
+        ts_lbl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        hdr.addWidget(ts_lbl)
+
+        lay.addLayout(hdr)
+
+        # ── separator ────────────────────────────────────────────────────
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {C.BORDER};")
+        lay.addWidget(sep)
+
+        # ── body text ────────────────────────────────────────────────────
+        body_lbl = QTextEdit()
+        body_lbl.setReadOnly(True)
+        body_lbl.setPlainText(body)
+        body_lbl.setFont(QFont("Courier New", 8))
+        body_lbl.setFixedHeight(min(120, max(52, body.count("\n") * 14 + 28)))
+        body_lbl.setStyleSheet(f"""
+            QTextEdit {{
+                background: transparent; color: {C.TEXT};
+                border: none; padding: 0; selection-background-color: {C.PRI_GHO};
+            }}
+            QScrollBar:vertical {{
+                background: {C.BG}; width: 5px; border: none;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {C.BORDER_B}; border-radius: 2px; min-height: 12px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0; border: none;
+            }}
+        """)
+        lay.addWidget(body_lbl)
+
+
+class ResultsPanel(QWidget):
+    """
+    Scrollable list of AI result cards.
+    Call  push(title, text)  from the main thread to add a card.
+    """
+    MAX_CARDS = 12
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._cards: list[_ResultCard] = []
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # scroll area
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; border: none; }}
+            QScrollBar:vertical {{
+                background: {C.BG}; width: 6px; border: none;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {C.BORDER_B}; border-radius: 3px; min-height: 16px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0; border: none;
+            }}
+        """)
+
+        self._inner = QWidget()
+        self._inner.setStyleSheet("background: transparent;")
+        self._inner_lay = QVBoxLayout(self._inner)
+        self._inner_lay.setContentsMargins(0, 0, 4, 0)
+        self._inner_lay.setSpacing(4)
+        self._inner_lay.addStretch()        # spacer at bottom — cards push up
+
+        self._scroll.setWidget(self._inner)
+        root.addWidget(self._scroll)
+
+        # ── empty-state placeholder ──────────────────────────────────────
+        self._empty_lbl = QLabel("No results yet.\nAsk ALICE to search the web,\ncheck news, or run a query.")
+        self._empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_lbl.setFont(QFont("Courier New", 8))
+        self._empty_lbl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        self._empty_lbl.setWordWrap(True)
+        self._inner_lay.insertWidget(0, self._empty_lbl)
+
+    # ── public API ───────────────────────────────────────────────────────────
+    def push(self, title: str, text: str) -> None:
+        """Prepend a new result card (newest on top). Must be called from Qt thread."""
+        import time as _t
+        ts = _t.strftime("%H:%M")
+
+        # hide empty-state label on first real card
+        if not self._cards:
+            self._empty_lbl.hide()
+
+        card = _ResultCard(title, text, ts)
+        # insert before the bottom stretch (index = count-1)
+        self._inner_lay.insertWidget(self._inner_lay.count() - 1, card)
+        self._cards.append(card)
+
+        # scroll to bottom (newest card)
+        QTimer.singleShot(30, lambda: self._scroll.verticalScrollBar().setValue(
+            self._scroll.verticalScrollBar().maximum()
+        ))
+
+        # evict oldest card if over limit
+        if len(self._cards) > self.MAX_CARDS:
+            old = self._cards.pop(0)
+            self._inner_lay.removeWidget(old)
+            old.deleteLater()
+
+    def clear_all(self) -> None:
+        """Remove all result cards and show empty placeholder."""
+        for card in self._cards:
+            self._inner_lay.removeWidget(card)
+            card.deleteLater()
+        self._cards.clear()
+        self._empty_lbl.show()
+
+
 class SettingsWindow(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -976,6 +1255,28 @@ class SettingsWindow(QDialog):
         self.live_model_input.setPlaceholderText("models/gemini-3.1-flash-live-preview")
         form.addRow("Live Model:", self.live_model_input)
 
+        self.voice_name_input = QComboBox()
+        self.voice_name_input.addItems(["Aoede", "Kore", "Charon", "Fenrir", "Puck"])
+        self.voice_name_input.setStyleSheet(f"""
+            QComboBox {{
+                background: #000d12;
+                color: {C.TEXT};
+                border: 1px solid {C.BORDER};
+                border-radius: 3px;
+                padding: 4px 6px;
+                font-family: 'Courier New';
+                font-size: 11px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: #000d12;
+                color: {C.TEXT};
+                selection-background-color: {C.PRI_DIM};
+                selection-color: {C.TEXT};
+                border: 1px solid {C.BORDER};
+            }}
+        """)
+        form.addRow("Live Voice:", self.voice_name_input)
+
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key_input.setPlaceholderText("AIzaSy...")
@@ -1079,6 +1380,10 @@ class SettingsWindow(QDialog):
                 pass
         
         self.live_model_input.setText(cfg.get("live_model", "models/gemini-3.1-flash-live-preview"))
+        voice = cfg.get("voice_name", "Aoede")
+        idx = self.voice_name_input.findText(voice)
+        if idx >= 0:
+            self.voice_name_input.setCurrentIndex(idx)
         self.api_key_input.setText(cfg.get("gemini_api_key", ""))
         self.sub2api_url_input.setText(cfg.get("sub2api_base_url", "https://sub2api.randompulse.my.id/antigravity"))
         self.sub2api_key_input.setText(cfg.get("sub2api_key", ""))
@@ -1104,6 +1409,7 @@ class SettingsWindow(QDialog):
                 pass
 
         cfg["live_model"] = self.live_model_input.text().strip()
+        cfg["voice_name"] = self.voice_name_input.currentText()
         cfg["gemini_api_key"] = self.api_key_input.text().strip()
         cfg["sub2api_base_url"] = self.sub2api_url_input.text().strip()
         cfg["sub2api_key"] = self.sub2api_key_input.text().strip()
@@ -1521,7 +1827,8 @@ class HudWindow(QWidget):
 
         self._fade_timer = QTimer(self)
         self._fade_timer.timeout.connect(self._fade_step)
-        self._fade_timer.start(16)
+        self._fade_is_transitioning = False   # True only during active fade
+        self._fade_timer.start(500)           # idle poll; speeds up during transitions
 
     def update_opacity(self):
         if not hasattr(self, "_first_greeting_done"):
@@ -1553,10 +1860,28 @@ class HudWindow(QWidget):
     def _fade_step(self):
         self.update_opacity()
 
-        if abs(self._current_opacity - self._target_opacity) > 0.01:
+        needs_move = abs(self._current_opacity - self._target_opacity) > 0.005
+
+        if needs_move:
+            # Canvas perlu render selama fade — pastikan timer aktif
+            self.hud.ensure_running()
+            # Smooth interpolation toward target
             diff = self._target_opacity - self._current_opacity
-            self._current_opacity += diff * 0.1
+            self._current_opacity += diff * 0.15
+            # Snap to target when close enough to avoid infinite micro-steps
+            if abs(self._current_opacity - self._target_opacity) < 0.005:
+                self._current_opacity = self._target_opacity
             self.setWindowOpacity(self._current_opacity)
+
+            # Ensure timer is running fast during transition
+            if not self._fade_is_transitioning:
+                self._fade_is_transitioning = True
+                self._fade_timer.setInterval(16)   # 60 FPS while fading
+        else:
+            # Opacity is stable — slow the timer way down
+            if self._fade_is_transitioning:
+                self._fade_is_transitioning = False
+                self._fade_timer.setInterval(500)  # 2 FPS idle poll
 
 
 class MainWindow(QMainWindow):
@@ -2127,22 +2452,35 @@ class MainWindow(QMainWindow):
 
         lay.addWidget(_sec("ACTIVITY LOG"))
         self._log = LogWidget()
+        self._log.file_dropped.connect(self._on_file_selected)   # drop file onto chat log
         lay.addWidget(self._log, stretch=1)
 
         sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
         lay.addWidget(sep)
 
-        lay.addWidget(_sec("FILE UPLOAD"))
-        self._drop_zone = FileDropZone()
-        self._drop_zone.file_selected.connect(self._on_file_selected)
-        lay.addWidget(self._drop_zone)
+        # ── AI Results ───────────────────────────────────────────────────
+        res_hdr = QHBoxLayout(); res_hdr.setSpacing(4)
+        res_hdr.addWidget(_sec("AI RESULTS"))
+        res_hdr.addStretch()
+        clr_btn = QPushButton("CLR")
+        clr_btn.setFixedSize(28, 14)
+        clr_btn.setFont(QFont("Courier New", 6, QFont.Weight.Bold))
+        clr_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        clr_btn.setToolTip("Clear all results")
+        clr_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_DIM};
+                border: 1px solid {C.BORDER}; border-radius: 2px;
+            }}
+            QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
+        """)
+        res_hdr.addWidget(clr_btn)
+        lay.addLayout(res_hdr)
 
-        self._file_hint = QLabel("No file loaded — drop or click above to upload")
-        self._file_hint.setFont(QFont("Courier New", 7))
-        self._file_hint.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
-        self._file_hint.setWordWrap(True)
-        lay.addWidget(self._file_hint)
+        self._results_panel = ResultsPanel()
+        clr_btn.clicked.connect(self._results_panel.clear_all)
+        lay.addWidget(self._results_panel, stretch=1)
 
         sep2 = QFrame(); sep2.setFrameShape(QFrame.Shape.HLine)
         sep2.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
@@ -2164,6 +2502,23 @@ class MainWindow(QMainWindow):
         self._mic_btn.clicked.connect(self._toggle_mute)
         row.addWidget(self._mic_btn)
         self._update_mic_btn_style()
+
+        # Attach / browse file button
+        self._attach_btn = QPushButton("📎")
+        self._attach_btn.setFixedSize(30, 30)
+        self._attach_btn.setFont(QFont("Courier New", 12))
+        self._attach_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._attach_btn.setToolTip("Attach a file")
+        self._attach_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {C.PANEL}; color: {C.TEXT_MED};
+                border: 1px solid {C.BORDER}; border-radius: 3px;
+            }}
+            QPushButton:hover {{ background: {C.PRI_GHO}; border: 1px solid {C.PRI}; color: {C.WHITE}; }}
+            QPushButton:pressed {{ background: {C.PRI_DIM}; }}
+        """)
+        self._attach_btn.clicked.connect(self._browse_file)
+        row.addWidget(self._attach_btn)
 
         self._input = QLineEdit()
         self._input.setPlaceholderText("Type a command or question…")
@@ -2282,14 +2637,18 @@ class MainWindow(QMainWindow):
         return w
 
     def _show_content(self, title: str, text: str):
-        """Slot — runs on Qt main thread. Updates and shows the content panel."""
+        """Slot — runs on Qt main thread.
+        Pushes a new result card into the AI Results panel (right panel)
+        AND keeps the collapsible bottom content-panel updated as before.
+        """
+        # ── right-panel results card (always visible, stacks up) ─────────
+        self._results_panel.push(title, text)
+
+        # ── collapsible bottom panel (legacy — still works) ───────────────
         import time as _time
         self._content_title_lbl.setText(title.upper()[:48])
         self._content_ts_lbl.setText(_time.strftime("%H:%M:%S"))
         self._content_display.setPlainText(text)
-        # Scroll to top
-        cur = self._content_display.textCursor()
-        cur.moveToStart() if hasattr(cur, "moveToStart") else None
         self._content_display.moveCursor(
             self._content_display.textCursor().MoveOperation.Start
         )
@@ -2314,13 +2673,33 @@ class MainWindow(QMainWindow):
         lay.addWidget(_fl("© STARK INDUSTRIES", C.PRI_DIM))
         return w
 
+    def _browse_file(self):
+        """Open a file-picker dialog and forward the chosen file to ALICE."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select a file for ALICE", str(Path.home()),
+            "All Files (*.*);;"
+            "Images (*.jpg *.jpeg *.png *.gif *.webp *.bmp *.svg *.tiff *.ico);;"
+            "Documents (*.pdf *.docx *.doc *.txt *.md *.rst *.pptx *.ppt);;"
+            "Data (*.csv *.tsv *.xlsx *.xls *.ods *.json *.xml);;"
+            "Code (*.py *.js *.ts *.jsx *.tsx *.html *.css *.java *.c *.cpp *.cs "
+            "*.go *.rs *.rb *.php *.swift *.kt *.sh *.sql *.lua);;"
+            "Audio (*.mp3 *.wav *.ogg *.m4a *.aac *.flac *.wma *.opus);;"
+            "Video (*.mp4 *.avi *.mov *.mkv *.wmv *.flv *.webm *.m4v);;"
+            "Archives (*.zip *.rar *.tar *.gz *.7z *.bz2 *.xz)",
+        )
+        if path:
+            self._on_file_selected(path)
+
     def _on_file_selected(self, path: str):
         self._current_file = path
         p    = Path(path)
         cat  = _file_category(p)
         icon, _ = _FILE_ICONS.get(cat, _FILE_ICONS["unknown"])
         size = _fmt_size(p.stat().st_size)
-        self._file_hint.setText(f"{icon}  {p.name}  ·  {size}  ·  Tell ALICE what to do with it")
+        self._results_panel.push(
+            f"{icon} FILE LOADED",
+            f"{p.name}\n{size}  ·  {cat.upper()}\n{path}\n\nTell ALICE what to do with it.",
+        )
         self._log.append_log(f"FILE: {p.name} ({size}) loaded")
         if self.on_text_command:
             msg = (
@@ -2440,23 +2819,41 @@ class MainWindow(QMainWindow):
             threading.Thread(target=self.on_text_command, args=(txt,), daemon=True).start()
 
     def _apply_state(self, state: str):
+        # Gatekeeper: abaikan jika state tidak berubah
+        if self.hud.state == state:
+            return
+        self.hud.ensure_running()
         self.hud.state    = state
         self.hud.speaking = (state == "SPEAKING")
         if hasattr(self, "hud_win") and self.hud_win:
             self.hud_win.update_opacity()
 
     def _apply_speaking_data(self, vol: float, freq: float):
+        # Gatekeeper: abaikan jika volume & frekuensi tidak berubah
+        # (mencegah spam dari _play_audio timeout setiap 500ms)
+        if self.hud.speaking_volume == vol and self.hud.speaking_frequency == freq:
+            return
+        self.hud.ensure_running()
         self.hud.speaking_volume = vol
         self.hud.speaking_frequency = freq
         self.hud.update()
 
     def _apply_user_speaking(self, active: bool):
+        # Gatekeeper: abaikan jika nilai tidak berubah
+        # (mencegah spam dari mic callback yang memanggil set_user_speaking(False) 10-20x/detik)
+        if self.hud.user_speaking == active:
+            return
+        self.hud.ensure_running()
         self.hud.user_speaking = active
         self.hud.update()
         if hasattr(self, "hud_win") and self.hud_win:
             self.hud_win.update_opacity()
 
     def _apply_mic_active(self, active: bool):
+        # Gatekeeper: abaikan jika nilai tidak berubah
+        if self.hud.mic_active == active:
+            return
+        self.hud.ensure_running()
         self.hud.mic_active = active
         self.hud.update()
         if hasattr(self, "hud_win") and self.hud_win:

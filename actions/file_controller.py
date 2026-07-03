@@ -322,35 +322,159 @@ def find_files(name: str = "", extension: str = "",
         if not search_path.exists():
             return f"Search path not found: {path}"
 
-        results    = []
-        dir_count  = 0
-        max_dirs   = 500  # performans + güvenlik limiti
+        results = []
+        source_note = ""
 
-        for item in search_path.rglob("*"):
-            if item.is_dir():
-                dir_count += 1
-                if dir_count > max_dirs:
+        # Try locate/mlocate for fast system-wide search on Linux
+        if _OS == "Linux" and not name:
+            for locate_bin in ["plocate", "mlocate", "locate"]:
+                loc = shutil.which(locate_bin)
+                if loc:
+                    try:
+                        import subprocess
+                        ext_pat = f"*{extension}" if extension else ""
+                        cmd = [loc, "-i", "-l", str(max_results), f"*{name}*{ext_pat}"]
+                        if search_path != Path.home():
+                            cmd.append(str(search_path))
+                        r = subprocess.run(
+                            cmd, capture_output=True, text=True, timeout=10
+                        )
+                        if r.returncode == 0:
+                            source_note = f" (via {locate_bin})"
+                            lines = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+                            for l in lines[:max_results]:
+                                p = Path(l)
+                                try:
+                                    sz = _format_size(p.stat().st_size)
+                                    results.append(f"📄 {p.name} ({sz}) — {p.parent}")
+                                except Exception:
+                                    results.append(f"📄 {p.name} — {p.parent}")
+                            break
+                    except Exception:
+                        continue
+
+        # Fallback to pure Python rglob
+        if not results:
+            dir_count = 0
+            max_dirs = 2000
+            for item in search_path.rglob("*"):
+                if item.is_dir():
+                    dir_count += 1
+                    if dir_count > max_dirs:
+                        break
+                    continue
+                if not item.is_file():
+                    continue
+                if extension and item.suffix.lower() != extension.lower():
+                    continue
+                if name and name.lower() not in item.name.lower():
+                    continue
+                size = _format_size(item.stat().st_size)
+                results.append(f"📄 {item.name} ({size}) — {item.parent}")
+                if len(results) >= max_results:
                     break
-                continue
-            if not item.is_file():
-                continue
-            if extension and item.suffix.lower() != extension.lower():
-                continue
-            if name and name.lower() not in item.name.lower():
-                continue
-            size = _format_size(item.stat().st_size)
-            results.append(f"📄 {item.name} ({size}) — {item.parent}")
-            if len(results) >= max_results:
-                break
 
         if not results:
             query = name or extension or "files"
             return f"No {query} found in {search_path.name}/"
 
-        return f"Found {len(results)} file(s):\n" + "\n".join(results)
+        return f"Found {len(results)} file(s){source_note}:\n" + "\n".join(results)
 
     except Exception as e:
         return f"Search error: {e}"
+
+
+def find_by_content(pattern: str = "", path: str = "home",
+                    max_results: int = 20, file_type: str = "") -> str:
+    try:
+        search_path = _resolve_path(path)
+        if not _is_safe_path(search_path):
+            return f"Access denied: {search_path}"
+        if not search_path.exists():
+            return f"Search path not found: {path}"
+        if not pattern:
+            return "No search pattern provided."
+
+        import subprocess
+
+        results = []
+        source_note = ""
+
+        # Try ripgrep first (fastest)
+        if _OS == "Linux" and shutil.which("rg") is not None:
+            source_note = " (via ripgrep)"
+            cmd = ["rg", "-l", "-i", "--max-count", "1", "--max-depth", "15",
+                   "--glob", "!.git", pattern, str(search_path)]
+            if file_type:
+                cmd.insert(cmd.index("--max-depth") + 1, "--type")
+                cmd.insert(cmd.index("--type") + 1, file_type)
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                if r.returncode in (0, 1):
+                    lines = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+                    for l in lines[:max_results]:
+                        p = Path(l)
+                        results.append(f"📄 {p.name} — {p.parent}")
+            except subprocess.TimeoutExpired:
+                pass
+
+        # Fallback to grep -r
+        if not results and _OS == "Linux":
+            source_note = " (via grep)"
+            try:
+                include_opt = ""
+                if file_type:
+                    ext_map = {
+                        "text": "--include=*.txt --include=*.md",
+                        "code": "--include=*.py --include=*.js --include=*.ts --include=*.html --include=*.css --include=*.java --include=*.cpp --include=*.go --include=*.rs --include=*.rb",
+                        "python": "--include=*.py",
+                        "html": "--include=*.html --include=*.htm",
+                        "markdown": "--include=*.md",
+                        "json": "--include=*.json",
+                        "yaml": "--include=*.yaml --include=*.yml",
+                    }
+                    include_opt = ext_map.get(file_type.lower(), "")
+                grep_cmd = f'grep -r -l -i "{pattern}" {str(search_path)} {include_opt} 2>/dev/null | head -{max_results}'
+                r = subprocess.run(grep_cmd, shell=True, capture_output=True, text=True, timeout=60)
+                if r.returncode in (0, 1):
+                    lines = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+                    for l in lines[:max_results]:
+                        p = Path(l)
+                        results.append(f"📄 {p.name} — {p.parent}")
+            except subprocess.TimeoutExpired:
+                pass
+
+        # Last resort: pure Python search (slow but reliable)
+        if not results:
+            source_note = " (scanning)"
+            dir_count = 0
+            max_dirs = 1000
+            for item in search_path.rglob("*"):
+                if item.is_dir():
+                    dir_count += 1
+                    if dir_count > max_dirs:
+                        break
+                    continue
+                if not item.is_file():
+                    continue
+                try:
+                    if item.stat().st_size > 10 * 1024 * 1024:  # skip files > 10MB
+                        continue
+                    content = item.read_text(encoding="utf-8", errors="ignore")
+                    if pattern.lower() in content.lower():
+                        results.append(f"📄 {item.name} — {item.parent}")
+                        if len(results) >= max_results:
+                            break
+                except Exception:
+                    continue
+
+        if not results:
+            return f"No files containing '{pattern}' found in {search_path.name}/{source_note}"
+
+        return f"Found {len(results)} file(s) containing '{pattern}'{source_note}:\n" + "\n".join(results)
+
+    except Exception as e:
+        return f"Content search error: {e}"
 
 
 def get_largest_files(path: str = "downloads", count: int = 10) -> str:
@@ -531,6 +655,14 @@ def file_controller(
                 extension=params.get("extension", ""),
                 path=path,
                 max_results=min(int(params.get("max_results", 20)), 50),
+            )
+
+        elif action == "find_by_content":
+            return find_by_content(
+                pattern=params.get("pattern", ""),
+                path=path,
+                max_results=min(int(params.get("max_results", 20)), 50),
+                file_type=params.get("file_type", ""),
             )
 
         elif action == "largest":

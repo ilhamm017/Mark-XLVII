@@ -41,11 +41,6 @@ from pathlib import Path
 import sounddevice as sd
 from google import genai
 from google.genai import types
-from core.audio_utils import (
-    default_input_rate,
-    default_output_rate,
-    resample_int16_mono,
-)
 
 # --- Sub2API Monkeypatching ---
 _OriginalClient = genai.Client
@@ -95,7 +90,7 @@ from memory.memory_manager import (
 
 from actions.file_processor import file_processor
 from actions.flight_finder     import flight_finder
-from actions.open_app          import open_app
+from actions.open_app          import open_app, list_installed_apps
 from actions.weather_report    import weather_action
 from actions.send_message      import send_message
 from actions.reminder          import reminder
@@ -502,11 +497,28 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "list_installed_apps",
+        "description": (
+            "Returns the list of all installed applications on the system. "
+            "Use this when the user asks what apps are available, or when you are unsure "
+            "about the exact name of an application. Can filter by category or search query. "
+            "Supports categories like: Development, Network, AudioVideo, Game, Office, Graphics, System, Utility."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "category": {"type": "STRING", "description": "Filter by category (e.g. Development, Network, AudioVideo)"},
+                "query": {"type": "STRING", "description": "Search by app name or keyword"}
+            },
+        }
+    },
+    {
         "name": "open_app",
         "description": (
             "Opens any application on the computer. "
             "Use this whenever the user asks to open, launch, or start any app, "
-            "website, or program. Always call this tool — never just say you opened it."
+            "website, or program. Always call this tool — never just say you opened it. "
+            "If the user mentions an app you are unsure about, call list_installed_apps first."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -675,14 +687,31 @@ TOOL_DECLARATIONS = [
             "Controls the computer: volume, brightness, window management, keyboard shortcuts, "
             "typing text on screen, closing apps, fullscreen, dark mode, WiFi, restart, shutdown, "
             "scrolling, tab management, zoom, screenshots, lock screen, refresh/reload page. "
-            "Use for ANY single computer control command."
+            "Use for ANY single computer control command.\n\n"
+            "Window management actions (set action + value=app_name):\n"
+            "  minimize          — minimize active window\n"
+            "  minimize_app      — minimize a specific window by name (set value to title)\n"
+            "  close_app         — close active window (Alt+F4)\n"
+            "  close_window      — close active tab/window (Ctrl+W / wmctrl)\n"
+            "  close_window_name — close a specific window by name (set value to title)\n"
+            "  focus_app         — focus/switch to a specific window by name\n"
+            "  resize_window     — resize a specific window (pass name, width, height, x, y)\n"
+            "  maximize          — maximize active window\n"
+            "  fullscreen        — toggle fullscreen (F11)\n"
+            "When user says 'close X' or 'minimize X', ALWAYS use close_window_name or minimize_app."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "action":      {"type": "STRING", "description": "The action to perform"},
                 "description": {"type": "STRING", "description": "Natural language description of what to do"},
-                "value":       {"type": "STRING", "description": "Optional value: volume level (absolute like 50, or relative like -10, +20), text to type, etc."}
+                "value":       {"type": "STRING", "description": "For close_window_name/minimize_app/focus_app: the window title or app name. For volume_set: volume level 0-100. For type_text: text to type."},
+                "name":        {"type": "STRING", "description": "Window/app name for resize_window action"},
+                "app":         {"type": "STRING", "description": "Alternative window/app name for close_window_name/minimize_app/focus_app"},
+                "width":       {"type": "INTEGER", "description": "Target width for resize_window"},
+                "height":      {"type": "INTEGER", "description": "Target height for resize_window"},
+                "x":           {"type": "INTEGER", "description": "X position for resize_window"},
+                "y":           {"type": "INTEGER", "description": "Y position for resize_window"},
             },
             "required": []
         }
@@ -723,7 +752,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "file_controller",
-        "description": "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, disk usage.",
+        "description": "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, find_by_content, disk usage.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
@@ -732,8 +761,10 @@ TOOL_DECLARATIONS = [
                 "destination": {"type": "STRING", "description": "Destination path for move/copy"},
                 "new_name":    {"type": "STRING", "description": "New name for rename"},
                 "content":     {"type": "STRING", "description": "Content for create_file/write"},
-                "name":        {"type": "STRING", "description": "File name to search for"},
+                "name":        {"type": "STRING", "description": "File name to search for (find action)"},
                 "extension":   {"type": "STRING", "description": "File extension to search (e.g. .pdf)"},
+                "pattern":     {"type": "STRING", "description": "Text pattern to search within file contents (find_by_content action)"},
+                "file_type":   {"type": "STRING", "description": "Filter by file type for find_by_content: text, code, python, html, markdown, json, yaml"},
                 "count":       {"type": "INTEGER", "description": "Number of results for largest"},
             },
             "required": ["action"]
@@ -985,12 +1016,6 @@ class JarvisLive:
         self._sys_monitor   = SystemMonitor()  # persistent cooldown state
         self._last_voice_time = 0.0
         self._play_stream     = None
-        self._mic_input_rate, self._mic_device = default_input_rate()
-        self._playback_rate, self._playback_device = default_output_rate()
-        print(
-            f"[ALICE] Audio configured: mic_rate={self._mic_input_rate} "
-            f"playback_rate={self._playback_rate}"
-        )
         self._turn_count      = 0
         self.mcp_tools        = []
         self.vscode_tool_names    = set()
@@ -1289,7 +1314,7 @@ class JarvisLive:
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name="Aoede"
+                        voice_name=_load_config_value("voice_name", "Aoede")
                     )
                 )
             ),
@@ -1371,6 +1396,16 @@ class JarvisLive:
                 else:
                     msg = res_data.get("message", "Failed to queue task.")
                     result = f"Failed to submit task to Hermes: {msg}"
+
+            elif name == "list_installed_apps":
+                r = await loop.run_in_executor(
+                    None,
+                    lambda: list_installed_apps(
+                        category=args.get("category", ""),
+                        query=args.get("query", ""),
+                    )
+                )
+                result = r or "No applications found."
 
             elif name == "open_app":
                 r = await loop.run_in_executor(None, lambda: open_app(parameters=args, response=None, player=self.ui))
@@ -1477,9 +1512,9 @@ class JarvisLive:
 
             else:
                 builtins = {
-                    "ask_hermes", "open_app", "weather_report", "browser_control", 
-                    "file_controller", "send_message", "ytmusic_control", "reminder", 
-                    "youtube_video", "screen_process", "computer_settings", 
+                    "ask_hermes", "open_app", "list_installed_apps", "weather_report",
+                    "browser_control", "file_controller", "send_message", "ytmusic_control",
+                    "reminder", "youtube_video", "screen_process", "computer_settings",
                     "desktop_control", "code_helper", "dev_agent", "web_search",
                     "file_processor", "computer_control", "game_updater", "flight_finder",
                     "system_status", "shutdown_alice", "save_memory"
@@ -1561,11 +1596,7 @@ class JarvisLive:
                     should_block_mic = True
 
             if not should_block_mic and not self.ui.muted and not self._phone_active:
-                if self._mic_input_rate != SEND_SAMPLE_RATE:
-                    pcm = resample_int16_mono(indata, self._mic_input_rate, SEND_SAMPLE_RATE)
-                    data = pcm.tobytes()
-                else:
-                    data = indata.tobytes()
+                data = indata.tobytes()
                 try:
                     loop.call_soon_threadsafe(
                         self.out_queue.put_nowait,
@@ -1584,8 +1615,7 @@ class JarvisLive:
                 loop.call_soon_threadsafe(self.ui.set_mic_active, True)
                 try:
                     with sd.InputStream(
-                        device=self._mic_device,
-                        samplerate=self._mic_input_rate,
+                        samplerate=SEND_SAMPLE_RATE,
                         channels=CHANNELS,
                         dtype="int16",
                         blocksize=CHUNK_SIZE,
@@ -1695,17 +1725,16 @@ class JarvisLive:
                 try:
                     chunk = await asyncio.wait_for(
                         self.audio_in_queue.get(),
-                        timeout=0.1
+                        timeout=0.5   # 500ms poll — lebih hemat CPU saat idle
                     )
                     idle_ticks = 0
                 except asyncio.TimeoutError:
                     self.ui.set_speaking_volume(0.0)
                     if stream is not None:
                         idle_ticks += 1
-                        if idle_ticks >= 5: # 0.5s of silence
+                        if idle_ticks >= 60:  # 30s of silence before closing (60 × 500ms)
                             try:
-                                stream.stop()
-                                stream.close()
+                                stream.close()   # close() otomatis stop jika masih aktif
                             except Exception:
                                 pass
                             stream = None
@@ -1725,8 +1754,7 @@ class JarvisLive:
                 if stream is None:
                     try:
                         stream = sd.RawOutputStream(
-                            device=self._playback_device,
-                            samplerate=self._playback_rate,
+                            samplerate=RECEIVE_SAMPLE_RATE,
                             channels=CHANNELS,
                             dtype="int16",
                         )
@@ -1761,17 +1789,16 @@ class JarvisLive:
                         
                         self.ui.set_speaking_volume(vol, freq_norm)
 
-                    if self._playback_rate != RECEIVE_SAMPLE_RATE:
-                        chunk_samples = resample_int16_mono(samples, RECEIVE_SAMPLE_RATE, self._playback_rate)
-                        chunk = chunk_samples.tobytes()
-
                     await asyncio.to_thread(stream.write, chunk)
                 except Exception as we:
                     print(f"[ALICE] Play chunk error (possibly stream closed): {we}")
                     if stream is not None:
+                        # Tunggu sebentar agar background thread ALSA/PortAudio
+                        # selesai memproses error sebelum stream dibersihkan,
+                        # mencegah memory corruption (malloc: unaligned tcache chunk)
+                        await asyncio.sleep(0.2)
                         try:
-                            stream.stop()
-                            stream.close()
+                            stream.close()   # close() sudah stop stream secara internal
                         except Exception:
                             pass
                         stream = None

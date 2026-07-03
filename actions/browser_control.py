@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import json
 import os
 import platform
 import shutil
@@ -10,6 +11,8 @@ import subprocess
 import threading
 from pathlib import Path
 from typing import Optional
+
+import httpx
 
 from playwright.async_api import (
     async_playwright,
@@ -285,8 +288,14 @@ def _resolve_browser(name: str) -> dict | None:
     for b in bins:
         found = shutil.which(b)
         if found:
-            exe = found
-            break
+            try:
+                r = subprocess.run([found, "--version"], capture_output=True, text=True, timeout=3)
+                if r.returncode == 0 and r.stdout.strip():
+                    exe = found
+                    break
+                print(f"[Browser] Skipping '{found}' — bukan binary real (exit={r.returncode}, out={r.stdout.strip()[:40]})")
+            except Exception as exc:
+                print(f"[Browser] Skipping '{found}' — error verifikasi: {exc}")
 
     if not exe and _OS == "Darwin":
         app_names = {
@@ -377,23 +386,42 @@ def _is_browseros_running() -> bool:
 
 
 def launch_browseros() -> bool:
+    if _is_browseros_running():
+        print("[BrowserOS] BrowserOS is already running.")
+        return True
+
     import subprocess
     import os
     import time
     import urllib.request
+    import platform
 
-    lnk_path = r"C:\Users\Administrator\Desktop\Others\BrowserOS.lnk"
-    exe_path = r"C:\Users\Administrator\AppData\Local\BrowserOS\Application\chrome.exe"
-    
     print("[BrowserOS] Launching BrowserOS...")
     try:
-        if os.path.exists(lnk_path):
-            os.startfile(lnk_path)
-        elif os.path.exists(exe_path):
-            subprocess.Popen([exe_path, "--startup-foreground-launch"], shell=True)
+        if platform.system() == "Windows":
+            lnk_path = r"C:\Users\Administrator\Desktop\Others\BrowserOS.lnk"
+            exe_path = r"C:\Users\Administrator\AppData\Local\BrowserOS\Application\chrome.exe"
+            if os.path.exists(lnk_path):
+                os.startfile(lnk_path)
+            elif os.path.exists(exe_path):
+                subprocess.Popen([exe_path, "--startup-foreground-launch"], shell=True)
+            else:
+                print("[BrowserOS] ❌ BrowserOS executable not found.")
+                return False
         else:
-            print("[BrowserOS] ❌ BrowserOS executable not found.")
-            return False
+            # Linux (yovaKakap)
+            import shutil
+            bin_path = shutil.which("browseros")
+            if not bin_path:
+                typical_path = os.path.expanduser("~/.local/bin/browseros")
+                if os.path.exists(typical_path):
+                    bin_path = typical_path
+            
+            if bin_path:
+                subprocess.Popen([bin_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                print("[BrowserOS] ❌ BrowserOS executable not found on Linux.")
+                return False
             
         # Wait up to 10 seconds for health check
         for i in range(10):
@@ -410,6 +438,65 @@ def launch_browseros() -> bool:
     except Exception as e:
         print(f"[BrowserOS] ❌ Failed to launch: {e}")
         return False
+
+
+_MCP_URL = "http://127.0.0.1:9000/mcp"
+
+
+def _call_browseros_mcp(tool_name: str, args: dict = None) -> dict:
+    if args is None:
+        args = {}
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {"name": tool_name, "arguments": args},
+        "id": 1,
+    }
+    init_payload = {
+        "jsonrpc": "2.0", "id": 0,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "alice", "version": "1.0"},
+        },
+    }
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            client.post(_MCP_URL, json=init_payload, headers=headers)
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.post(_MCP_URL, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            if "error" in data:
+                raise RuntimeError(f"MCP error: {data['error']}")
+            return data.get("result", {})
+    except Exception as e:
+        raise RuntimeError(f"BrowserOS MCP call '{tool_name}' failed: {e}") from e
+
+
+def _get_active_page_id() -> int:
+    """Returns the active page ID from BrowserOS, or 0 if none."""
+    try:
+        result = _call_browseros_mcp("list_pages")
+        sc = result.get("structuredContent") or {}
+        pages = sc.get("pages") or result.get("pages") or []
+        if not pages:
+            content_list = result.get("content", [])
+            for c in content_list:
+                if isinstance(c, dict) and c.get("structuredContent"):
+                    sc2 = c["structuredContent"]
+                    pages = sc2.get("pages", [])
+                    break
+        if pages:
+            for p in pages:
+                if p.get("isActive"):
+                    return int(p["pageId"])
+            return int(pages[0]["pageId"])
+    except Exception:
+        pass
+    return 0
 
 
 class _BrowserSession:
@@ -495,9 +582,8 @@ class _BrowserSession:
         if self.browser_name == "browseros":
             is_running = await asyncio.to_thread(_is_browseros_running)
             if not is_running:
-                if platform.system() == "Windows":
-                    await asyncio.to_thread(launch_browseros)
-                else:
+                launched = await asyncio.to_thread(launch_browseros)
+                if not launched:
                     # Fallback to local chromium/firefox/brave/edge
                     fallback_found = False
                     for name in ["chrome", "firefox", "brave", "edge"]:
@@ -506,7 +592,7 @@ class _BrowserSession:
                             self.browser_name = name
                             self._spec = spec
                             fallback_found = True
-                            print(f"[Browser] ⚠️ BrowserOS is not running on {platform.system()}. Falling back to local browser: '{name}' (exe: {spec['exe']})")
+                            print(f"[Browser] ⚠️ BrowserOS is not running on {platform.system()} and failed to launch. Falling back to local browser: '{name}' (exe: {spec['exe']})")
                             break
                     if not fallback_found:
                         print("[Browser] ⚠️ No local browser found. Raising error.")
@@ -868,11 +954,18 @@ class _SessionRegistry:
             return self._sessions[browser_name]
 
     def get(self, browser_name: str | None = None) -> _BrowserSession:
+        raw_name = browser_name
+        if browser_name:
+            browser_name = _ALIASES.get(browser_name.lower().strip(), browser_name.lower().strip())
         if _is_browseros_running():
             browser_name = "browseros"
         elif not browser_name:
-            browser_name = self._active_browser or "browseros"
-        browser_name = _ALIASES.get(browser_name.lower().strip(), browser_name.lower().strip())
+            browser_name = "browseros"
+        if browser_name == "browseros" and not _is_browseros_running():
+            launched = launch_browseros()
+            if not launched:
+                browser_name = self._active_browser or "chrome"
+                print("[Browser] BrowserOS unavailable, falling back to", browser_name)
         sess = self._get_or_create(browser_name)
         self._active_browser = browser_name
         return sess
@@ -918,6 +1011,30 @@ class _SessionRegistry:
 
 
 def focus_browseros() -> bool:
+    if _OS == "Linux":
+        import shutil
+        if shutil.which("wmctrl"):
+            try:
+                env = os.environ.copy()
+                if "DISPLAY" not in env:
+                    env["DISPLAY"] = ":0"
+                res = subprocess.run(["wmctrl", "-a", "BrowserOS"], env=env, capture_output=True, text=True, timeout=3)
+                if res.returncode == 0:
+                    return True
+            except Exception:
+                pass
+        if shutil.which("xdotool"):
+            try:
+                env = os.environ.copy()
+                if "DISPLAY" not in env:
+                    env["DISPLAY"] = ":0"
+                    # xdotool needs DISPLAY set
+                subprocess.run(["xdotool", "search", "--name", "BrowserOS", "windowactivate"], env=env, capture_output=True, text=True, timeout=3)
+                return True
+            except Exception:
+                pass
+        return False
+
     if _OS != "Windows":
         return False
     try:
@@ -1032,6 +1149,103 @@ def focus_browseros() -> bool:
 
 _registry = _SessionRegistry()
 
+def _run_via_mcp(action: str, params: dict) -> str | None:
+    """Try to run browser action via BrowserOS MCP. Returns result string or None if not supported."""
+    from urllib.parse import quote
+
+    mcp_actions = {
+        "go_to": lambda p: _call_browseros_mcp("new_page", {"url": p.get("url", ""), "background": False}),
+        "new_tab": lambda p: _call_browseros_mcp("new_page", {"url": p.get("url", "about:blank"), "background": False}),
+        "press": lambda p: _call_browseros_mcp(
+            "press_key", {"page": _get_active_page_id(), "key": p.get("key", "Enter")}
+        ) if _get_active_page_id() else {"error": "No active page."},
+        "scroll": lambda p: _call_browseros_mcp("scroll", {
+            "page": _get_active_page_id(),
+            "direction": p.get("direction", "down"),
+            "amount": int(p.get("amount", 3)),
+        }) if _get_active_page_id() else {"error": "No active page."},
+        "close_tab": lambda p: _call_browseros_mcp(
+            "close_page", {"page": _get_active_page_id()}
+        ) if _get_active_page_id() else {"error": "No active page."},
+    }
+
+    # Actions that need page ID via a temp helper
+    if action == "get_text":
+        pid = _get_active_page_id()
+        if not pid:
+            return "No active page."
+        r = _call_browseros_mcp("get_page_content", {"page": pid})
+        sc = r.get("structuredContent") or {}
+        text = sc.get("content") or r.get("content") or r.get("text", "")
+        if isinstance(text, list):
+            text = "\n".join(str(x) for x in text)
+        if not text:
+            for c in r.get("content", []):
+                if isinstance(c, dict) and c.get("type") == "text":
+                    text = c.get("text", "")
+                    break
+        return str(text)[:2000] or str(r)[:500]
+
+    if action == "get_url":
+        pid = _get_active_page_id()
+        if not pid:
+            return "No active page."
+        r = _call_browseros_mcp("evaluate_script", {"page": pid, "expression": "window.location.href"})
+        sc = r.get("structuredContent") or {}
+        value = sc.get("value") or r.get("value") or ""
+        if not value:
+            for c in r.get("content", []):
+                if isinstance(c, dict) and c.get("type") == "text":
+                    value = c["text"]
+                    break
+        return str(value)
+
+    if action == "back":
+        pid = _get_active_page_id()
+        if not pid:
+            return "No active page."
+        _call_browseros_mcp("evaluate_script", {"page": pid, "expression": "window.history.back()"})
+        return "Navigated back."
+
+    if action == "forward":
+        pid = _get_active_page_id()
+        if not pid:
+            return "No active page."
+        _call_browseros_mcp("evaluate_script", {"page": pid, "expression": "window.history.forward()"})
+        return "Navigated forward."
+
+    if action == "reload":
+        pid = _get_active_page_id()
+        if not pid:
+            return "No active page."
+        _call_browseros_mcp("evaluate_script", {"page": pid, "expression": "window.location.reload()"})
+        return "Page reloaded."
+
+    if action == "screenshot":
+        pid = _get_active_page_id()
+        if not pid:
+            return "No active page."
+        r = _call_browseros_mcp("take_screenshot", {"page": pid})
+        return f"Screenshot taken: {str(r)[:200]}"
+
+    if action == "search":
+        query = params.get("query", "")
+        engine = params.get("engine", "google")
+        url = f"https://{engine}.com/search?q={quote(query)}"
+        r = _call_browseros_mcp("new_page", {"url": url, "background": False})
+        return f"Searching {engine} for '{query}'"
+
+    # Check simple mcp_actions map
+    handler = mcp_actions.get(action)
+    if handler:
+        r = handler(params)
+        if isinstance(r, dict) and "error" in r:
+            return r["error"]
+        return f"{action}: {str(r)[:200]}"
+
+    return None  # Not supported via MCP
+
+
 def browser_control(
     parameters:    dict = None,
     response=None,
@@ -1060,6 +1274,28 @@ def browser_control(
         result = _registry.close_all()
         _log(player, result)
         return result
+
+    # Determine if BrowserOS MCP should be used
+    use_mcp = False
+    if action not in ("close",):
+        if _is_browseros_running():
+            use_mcp = True
+        elif not browser or browser in ("browseros", ""):
+            if launch_browseros():
+                use_mcp = True
+
+    if use_mcp:
+        try:
+            mcp_result = _run_via_mcp(action, params)
+            if mcp_result is not None:
+                if action in ("go_to", "search", "new_tab"):
+                    focus_browseros()
+                _log(player, mcp_result)
+                return mcp_result
+            # Fall through to Playwright if MCP doesn't support this action
+            print(f"[Browser] MCP doesn't support '{action}', falling back to Playwright")
+        except Exception as e:
+            print(f"[Browser] MCP failed for '{action}': {e}, falling back to Playwright")
 
     try:
         sess = _registry.get(browser)

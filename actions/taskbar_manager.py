@@ -1,6 +1,7 @@
 # taskbar_manager.py
 import platform
 import subprocess
+from pathlib import Path
 
 _OS = platform.system()
 
@@ -95,7 +96,6 @@ def get_visible_windows_macos() -> list[dict]:
     return []
 
 def get_visible_windows_linux() -> list[dict]:
-    # Fallback using wmctrl
     try:
         res = subprocess.run(["wmctrl", "-lp"], capture_output=True, text=True, timeout=5)
         if res.returncode == 0:
@@ -103,8 +103,18 @@ def get_visible_windows_linux() -> list[dict]:
             for line in res.stdout.splitlines():
                 parts = line.split(None, 4)
                 if len(parts) >= 5:
+                    win_id = parts[0]
+                    pid = parts[2]
                     title = parts[4].strip()
-                    windows.append({"title": title, "process_name": "Unknown"})
+                    proc_name = "Unknown"
+                    if pid != "-1":
+                        try:
+                            comm_path = Path(f"/proc/{pid}/comm")
+                            if comm_path.exists():
+                                proc_name = comm_path.read_text(encoding="utf-8").strip()
+                        except Exception:
+                            pass
+                    windows.append({"title": title, "process_name": proc_name, "id": win_id, "pid": pid})
             return windows
     except Exception:
         pass
@@ -160,9 +170,20 @@ def get_active_window(parameters=None, response=None, player=None, session_memor
             return f"Error: {e}"
     else:
         try:
-            res = subprocess.run(["xdotool", "getactivewindow", "getwindowname"], capture_output=True, text=True, timeout=3)
-            if res.returncode == 0:
-                return f"Active Window: '{res.stdout.strip()}'"
+            title_res = subprocess.run(["xdotool", "getactivewindow", "getwindowname"], capture_output=True, text=True, timeout=3)
+            if title_res.returncode == 0:
+                title = title_res.stdout.strip()
+                pid_res = subprocess.run(["xdotool", "getactivewindow", "getwindowpid"], capture_output=True, text=True, timeout=3)
+                pid = pid_res.stdout.strip() if pid_res.returncode == 0 else "?"
+                proc_name = "Unknown"
+                if pid != "?":
+                    try:
+                        comm_path = Path(f"/proc/{pid}/comm")
+                        if comm_path.exists():
+                            proc_name = comm_path.read_text(encoding="utf-8").strip()
+                    except Exception:
+                        pass
+                return f"Active Window: '{title}' (Process: '{proc_name}', PID: {pid})"
         except Exception:
             pass
     return "Could not determine active window."

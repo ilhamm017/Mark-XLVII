@@ -51,6 +51,155 @@ def _get_macos_wifi_interface() -> str:
         pass
     return "en0" 
 
+# ── Linux window helpers ──────────────────────────────────────────────────
+def _try_xdotool(action: str, win_id: str | None = None) -> bool:
+    if _OS != "Linux":
+        return False
+    import shutil
+    if not shutil.which("xdotool"):
+        return False
+    try:
+        cmd = ["xdotool"]
+        if win_id:
+            cmd.extend([str(win_id)])
+        cmd.append(action)
+        if not win_id:
+            cmd.insert(1, "getactivewindow")
+        r = subprocess.run(cmd, capture_output=True, timeout=3)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _list_linux_windows() -> list[dict]:
+    windows = []
+    try:
+        r = subprocess.run(
+            ["wmctrl", "-lp"],
+            capture_output=True, text=True, timeout=3
+        )
+        if r.returncode != 0:
+            return windows
+        for line in r.stdout.splitlines():
+            parts = line.split(None, 4)
+            if len(parts) >= 5:
+                win_id = parts[0]
+                pid = parts[2]
+                title = parts[4].strip()
+                proc_name = "Unknown"
+                if pid != "-1":
+                    try:
+                        proc_path = Path(f"/proc/{pid}/comm")
+                        if proc_path.exists():
+                            proc_name = proc_path.read_text(encoding="utf-8").strip()
+                    except Exception:
+                        pass
+                windows.append({
+                    "id": win_id,
+                    "pid": pid,
+                    "title": title,
+                    "process_name": proc_name,
+                })
+    except Exception:
+        pass
+    return windows
+
+
+def _find_windows_by_name(query: str) -> list[dict]:
+    q = query.lower()
+    matches = []
+    for w in _list_linux_windows():
+        if q in w["title"].lower() or q in w["process_name"].lower():
+            matches.append(w)
+    return matches
+
+
+def _focus_linux_window(win_id: str) -> bool:
+    import shutil
+    if shutil.which("wmctrl"):
+        try:
+            r = subprocess.run(
+                ["wmctrl", "-i", "-a", win_id],
+                capture_output=True, timeout=3
+            )
+            if r.returncode == 0:
+                return True
+        except Exception:
+            pass
+    if shutil.which("xdotool"):
+        try:
+            r = subprocess.run(
+                ["xdotool", "windowactivate", win_id],
+                capture_output=True, timeout=3
+            )
+            return r.returncode == 0
+        except Exception:
+            pass
+    return False
+
+
+def minimize_window_by_name(name: str) -> bool:
+    windows = _find_windows_by_name(name)
+    if not windows:
+        return False
+    win = windows[0]
+    if _focus_linux_window(win["id"]):
+        return _try_xdotool("windowminimize", win["id"])
+    return False
+
+
+def close_window_by_name(name: str) -> bool:
+    windows = _find_windows_by_name(name)
+    if not windows:
+        return False
+    for win in windows:
+        try:
+            r = subprocess.run(
+                ["wmctrl", "-i", "-c", win["id"]],
+                capture_output=True, timeout=3
+            )
+            if r.returncode == 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def focus_window_by_name(name: str) -> bool:
+    windows = _find_windows_by_name(name)
+    if not windows:
+        return False
+    return _focus_linux_window(windows[0]["id"])
+
+
+def resize_window_by_name(name: str, width: int = -1, height: int = -1,
+                          x: int = -1, y: int = -1) -> bool:
+    windows = _find_windows_by_name(name)
+    if not windows:
+        return False
+    win = windows[0]
+    if not _focus_linux_window(win["id"]):
+        return False
+    geom = "0"
+    if x >= 0 or y >= 0:
+        geom += f",{max(0,x)},{max(0,y)}"
+    else:
+        geom += ",-1,-1"
+    if width > 0 and height > 0:
+        geom += f",{width},{height}"
+    else:
+        geom += ",-1,-1"
+    try:
+        r = subprocess.run(
+            ["wmctrl", "-i", "-r", win["id"], "-e", geom],
+            capture_output=True, timeout=3
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+# ── Volume ─────────────────────────────────────────────────────────────────
 def volume_up():
     if _OS == "Windows":
         for _ in range(5): pyautogui.press("volumeup")
@@ -200,12 +349,25 @@ def brightness_down():
             print(f"[Settings] Brightness down failed on Windows: {e}")
 
 def close_app():
-    if _OS == "Darwin": pyautogui.hotkey("command", "q")
-    else:               pyautogui.hotkey("alt", "f4")
+    if _OS == "Darwin":
+        pyautogui.hotkey("command", "q")
+    elif _OS == "Windows":
+        pyautogui.hotkey("alt", "f4")
+    else:
+        if _try_xdotool("windowclose"):
+            return
+        pyautogui.hotkey("alt", "f4")
 
 def close_window():
-    if _OS == "Darwin": pyautogui.hotkey("command", "w")
-    else:               pyautogui.hotkey("ctrl", "w")
+    if _OS == "Darwin":
+        pyautogui.hotkey("command", "w")
+    elif _OS == "Windows":
+        pyautogui.hotkey("ctrl", "w")
+    else:
+        try:
+            subprocess.run(["wmctrl", "-c", ":ACTIVE:"], capture_output=True, timeout=3)
+        except Exception:
+            pyautogui.hotkey("ctrl", "w")
 
 def full_screen():
     if _OS == "Darwin": pyautogui.hotkey("ctrl", "command", "f")
@@ -225,7 +387,9 @@ def minimize_window():
             print(f"[Settings] Win32 minimize failed: {e}")
             pyautogui.hotkey("win", "down")
     else:
-        pyautogui.hotkey("win", "down")
+        if _try_xdotool("windowminimize"):
+            return
+        pyautogui.hotkey("super", "h")
 
 def maximize_window():
     if _OS == "Darwin":
@@ -445,6 +609,32 @@ def open_system_settings():
                 subprocess.Popen(cmd)
                 return
 
+def open_bluetooth_settings():
+    if _OS == "Windows":
+        try:
+            subprocess.Popen(["explorer", "ms-settings:bluetooth"])
+        except Exception as e:
+            print(f"[Settings] open_bluetooth_settings Windows failed: {e}")
+    elif _OS == "Darwin":
+        try:
+            subprocess.Popen(["open", "x-apple.systempreferences:com.apple.Bluetooth"])
+        except Exception as e:
+            print(f"[Settings] open_bluetooth_settings macOS failed: {e}")
+    else:
+        candidates = [
+            ["gnome-control-center", "bluetooth"],
+            ["blueman-manager"],
+            ["kcmshell5", "kcm_bluetooth"],
+        ]
+        for cmd in candidates:
+            if subprocess.run(["which", cmd[0]], capture_output=True).returncode == 0:
+                try:
+                    subprocess.Popen(cmd)
+                    return
+                except Exception as e:
+                    print(f"[Settings] open_bluetooth_settings Linux failed for {cmd}: {e}")
+        print("[Settings] Bluetooth settings app not found on this system.")
+
 def open_file_explorer():
     if _OS == "Windows":
         pyautogui.hotkey("win", "e")
@@ -568,10 +758,14 @@ ACTION_MAP: dict[str, callable] = {
     "play_pause":          pause_video,
     "close_app":           close_app,
     "close_window":        close_window,
+    "close_window_name":   close_window_by_name,
     "full_screen":         full_screen,
     "fullscreen":          full_screen,
     "minimize":            minimize_window,
+    "minimize_app":        minimize_window_by_name,
     "maximize":            maximize_window,
+    "focus_app":           focus_window_by_name,
+    "resize_window":       resize_window_by_name,
     "snap_left":           snap_left,
     "snap_right":          snap_right,
     "switch_window":       switch_window,
@@ -608,6 +802,8 @@ ACTION_MAP: dict[str, callable] = {
     "screenshot":          take_screenshot,
     "lock_screen":         lock_screen,
     "open_settings":       open_system_settings,
+    "open_bluetooth":      open_bluetooth_settings,
+    "bluetooth_settings":   open_bluetooth_settings,
     "file_explorer":       open_file_explorer,
     "open_run":            open_run,
     "dark_mode":           dark_mode,
@@ -677,7 +873,7 @@ def computer_settings(
     action = raw_action.lower().strip().replace(" ", "_").replace("-", "_")
 
     # If action is not recognized, fallback to description intent detection
-    known_handlers = ("volume_set", "type_text", "write_on_screen", "type", "write", "press_key", "reload_n", "refresh_n", "reload_page_n", "scroll_up", "scroll_down")
+    known_handlers = ("volume_set", "type_text", "write_on_screen", "type", "write", "press_key", "reload_n", "refresh_n", "reload_page_n", "scroll_up", "scroll_down", "close_window_name", "minimize_app", "focus_app", "resize_window")
     if action not in ACTION_MAP and action not in known_handlers:
         if description:
             try:
@@ -776,6 +972,49 @@ def computer_settings(
     if action == "scroll_down":
         scroll_down(int(value or 500))
         return "Scrolled down."
+
+    if action == "close_window_name":
+        name = str(value or params.get("name", "") or params.get("app", "")).strip()
+        if not name:
+            return "Please specify a window name to close."
+        if close_window_by_name(name):
+            return f"Closed window: {name}"
+        return f"Could not find window: {name}"
+
+    if action == "minimize_app":
+        name = str(value or params.get("name", "") or params.get("app", "")).strip()
+        if not name:
+            return "Please specify a window name to minimize."
+        if minimize_window_by_name(name):
+            return f"Minimized window: {name}"
+        # Fallback: if specific window not found, minimize active
+        minimize_window()
+        return f"Could not find '{name}', minimized active window instead."
+
+    if action == "focus_app":
+        name = str(value or params.get("name", "") or params.get("app", "")).strip()
+        if not name:
+            return "Please specify a window name to focus."
+        if focus_window_by_name(name):
+            return f"Focused window: {name}"
+        return f"Could not find window: {name}"
+
+    if action == "resize_window":
+        name = str(params.get("name", "") or params.get("app", "")).strip()
+        w = params.get("width", -1)
+        h = params.get("height", -1)
+        x = params.get("x", -1)
+        y = params.get("y", -1)
+        if not name:
+            return "Please specify a window name to resize."
+        if resize_window_by_name(name, w, h, x, y):
+            parts = []
+            if x >= 0 and y >= 0:
+                parts.append(f"position ({x},{y})")
+            if w > 0 and h > 0:
+                parts.append(f"size {w}x{h}")
+            return f"Resized {name}: {', '.join(parts)}"
+        return f"Could not resize window: {name}"
 
     func = ACTION_MAP.get(action)
     if not func:

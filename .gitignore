@@ -13,3 +13,7 @@ list_hid_devices.py
 search_response.json
 swagger_doc.json
 *.log
+
+venv/
+config/api_keys.json
+memory/
