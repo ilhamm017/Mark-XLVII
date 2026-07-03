@@ -33,9 +33,8 @@ This document records the major changes, architectural migrations, and feature u
 * **Taskbar App Listing**: Added the `list_taskbar_apps` tool using Windows `EnumWindows` to filter and return only visible, active GUI application windows currently on the taskbar, excluding system process noises.
 * **Bypassing LockSetForegroundWindow**: To prevent Windows from blocking foreground transitions (which makes taskbar icons flash yellow without raising the window), we implemented a multi-layered force-focus bypass in `open_app.py` and `browser_control.py`:
   1. **UWP Window Checks**: Added class name verification (`ApplicationFrameWindow` check) for Windows modern apps (like Settings, Calculator) to always trigger `SW_RESTORE` since UWP apps hide their iconic minimized state from standard checks.
-  2. **Z-Order Force Lift**: Temporarily tags target windows as `HWND_TOPMOST` and immediately resets them to `HWND_NOTOPMOST`, forcing Windows to bypass focus locks and raise the window.
-  3. **Alt-Tab Simulation**: Calls the undocumented `SwitchToThisWindow` API.
-  4. **Multi-layer Retries**: Falls back to direct `SetForegroundWindow`, keyboard virtual `Alt` key down/up presses, and `AttachThreadInput` hooks.
+  2. **Alt-Tab Simulation**: Calls the undocumented `SwitchToThisWindow` API (incredibly robust for cross-process Z-order transitions).
+  3. **Multi-layer Retries**: Falls back to direct `SetForegroundWindow`, keyboard virtual `Alt` key down/up presses, and `AttachThreadInput` hooks.
 * **Process Fallback Matching**: Matches input queries (e.g. "buka chrome") against the window title OR the active process executable name (e.g. `chrome.exe`).
 
 ---
