@@ -436,7 +436,24 @@ def desktop_control(
     try:
         if action == "wallpaper":
             path = params.get("path", "")
-            return set_wallpaper(path) if path else "No image path provided."
+            if not path:
+                search_dirs = [
+                    _get_desktop(),
+                    Path("~/Pictures").expanduser(),
+                    Path("~/Downloads").expanduser(),
+                ]
+                found_images = []
+                for sd in search_dirs:
+                    if sd.exists():
+                        for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
+                            found_images.extend(sd.glob(ext))
+                if found_images:
+                    found_images.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                    newest_img = found_images[0]
+                    res = set_wallpaper(str(newest_img))
+                    return f"No path was provided. Auto-selected the newest image found: '{newest_img}'. Result: {res}"
+                return "No image path provided and no images found in Desktop, Pictures, or Downloads."
+            return set_wallpaper(path)
 
         elif action == "wallpaper_url":
             url = params.get("url", "")

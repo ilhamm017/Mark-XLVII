@@ -22,6 +22,33 @@ def weather_action(
     url           = f"https://www.google.com/search?q={quote_plus(search_query)}"
 
     try:
+        import urllib.request
+        browseros_running = False
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:9200/health", timeout=1) as response:
+                browseros_running = (response.status == 200)
+        except Exception:
+            pass
+
+        if browseros_running:
+            try:
+                from actions.browser_control import browser_control
+                print(f"[Weather] Opening search in BrowserOS: {url}")
+                browser_control({"action": "go_to", "url": url}, player)
+                msg = f"Showing the weather for {city}, {when} in BrowserOS, sir."
+                _log(msg, player)
+                if session_memory:
+                    try:
+                        session_memory.set_last_search(query=search_query, response=msg)
+                    except Exception:
+                        pass
+                return msg
+            except Exception as e:
+                print(f"[Weather] ⚠️ Failed to open in BrowserOS: {e}")
+    except Exception as e:
+        print(f"[Weather] ⚠️ BrowserOS check failed: {e}")
+
+    try:
         opened = webbrowser.open(url)
         if not opened:
             raise RuntimeError("webbrowser.open returned False")

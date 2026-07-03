@@ -14,6 +14,7 @@ from typing import Optional
 from playwright.async_api import (
     async_playwright,
     BrowserContext,
+    Browser,
     Page,
     Playwright,
     TimeoutError as PlaywrightTimeout,
@@ -215,6 +216,7 @@ def _find_exe_windows(prog_name: str) -> Optional[str]:
 
 _BROWSER_SPECS: dict[str, dict] = {
     "Windows": {
+        "browseros": {"engine": "chromium", "channel": None,      "bins": []},
         "chrome":   {"engine": "chromium", "channel": "chrome",  "bins": []},
         "edge":     {"engine": "chromium", "channel": "msedge",  "bins": []},
         "firefox":  {"engine": "firefox",  "channel": None,      "bins": ["firefox.exe"]},
@@ -225,6 +227,7 @@ _BROWSER_SPECS: dict[str, dict] = {
         "safari":   None,
     },
     "Darwin": {
+        "browseros": {"engine": "chromium", "channel": None,      "bins": []},
         "chrome":   {"engine": "chromium", "channel": "chrome",  "bins": []},
         "edge":     {"engine": "chromium", "channel": "msedge",  "bins": ["microsoft-edge"]},
         "firefox":  {"engine": "firefox",  "channel": None,      "bins": ["firefox"]},
@@ -235,6 +238,7 @@ _BROWSER_SPECS: dict[str, dict] = {
         "safari":   {"engine": "webkit",   "channel": None,      "bins": []},
     },
     "Linux": {
+        "browseros": {"engine": "chromium", "channel": None,      "bins": []},
         "chrome":   {"engine": "chromium", "channel": None,
                      "bins": ["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"]},
         "edge":     {"engine": "chromium", "channel": None,
@@ -344,6 +348,51 @@ def _detect_default_browser() -> str:
     return "chrome"
 
 
+def _is_browseros_running() -> bool:
+    try:
+        import urllib.request
+        with urllib.request.urlopen("http://127.0.0.1:9200/health", timeout=1) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+def launch_browseros() -> bool:
+    import subprocess
+    import os
+    import time
+    import urllib.request
+
+    lnk_path = r"C:\Users\Administrator\Desktop\Others\BrowserOS.lnk"
+    exe_path = r"C:\Users\Administrator\AppData\Local\BrowserOS\Application\chrome.exe"
+    
+    print("[BrowserOS] Launching BrowserOS...")
+    try:
+        if os.path.exists(lnk_path):
+            os.startfile(lnk_path)
+        elif os.path.exists(exe_path):
+            subprocess.Popen([exe_path, "--startup-foreground-launch"], shell=True)
+        else:
+            print("[BrowserOS] ❌ BrowserOS executable not found.")
+            return False
+            
+        # Wait up to 10 seconds for health check
+        for i in range(10):
+            time.sleep(1.0)
+            try:
+                with urllib.request.urlopen("http://127.0.0.1:9200/health", timeout=1) as response:
+                    if response.status == 200:
+                        print("[BrowserOS] ✅ Started and healthy!")
+                        return True
+            except Exception:
+                pass
+        print("[BrowserOS] ⚠️ Started but health check timed out.")
+        return False
+    except Exception as e:
+        print(f"[BrowserOS] ❌ Failed to launch: {e}")
+        return False
+
+
 class _BrowserSession:
     """
     Bir tarayıcı örneği için tam oturum.
@@ -359,6 +408,7 @@ class _BrowserSession:
         self._ready    = threading.Event()
 
         self._pw:      Playwright     | None = None
+        self._browser: Browser        | None = None
         self._context: BrowserContext | None = None
         self._page:    Page           | None = None
 
@@ -394,6 +444,15 @@ class _BrowserSession:
             asyncio.run_coroutine_threadsafe(self._async_close(), self._loop).result(10)
 
     async def _async_close(self):
+        if self.browser_name == "browseros":
+            if self._browser:
+                try:
+                    await self._browser.close()
+                except Exception:
+                    pass
+            self._browser = self._context = self._page = None
+            return
+
         if self._context:
             try:
                 await self._context.close()
@@ -413,6 +472,27 @@ class _BrowserSession:
         """
         if self._context is not None:
             return
+
+        if self.browser_name == "browseros":
+            is_running = await asyncio.to_thread(_is_browseros_running)
+            if not is_running:
+                await asyncio.to_thread(launch_browseros)
+            print("[Browser] Connecting to BrowserOS via CDP on port 9100...")
+            try:
+                browser = await self._pw.chromium.connect_over_cdp("http://127.0.0.1:9100")
+                self._browser = browser
+                self._context = browser.contexts[0] if browser.contexts else await browser.new_context()
+                pages = self._context.pages
+                normal_pages = [p for p in pages if not p.url.startswith("chrome-extension://")]
+                if normal_pages:
+                    self._page = normal_pages[-1]
+                else:
+                    self._page = await self._context.new_page()
+                print("[Browser] ✅ Connected to BrowserOS!")
+                return
+            except Exception as e:
+                print(f"[Browser] ❌ Failed to connect to BrowserOS: {e}")
+                raise RuntimeError(f"Could not connect to BrowserOS: {e}") from e
 
         if self._spec is None:
             raise RuntimeError(
@@ -752,8 +832,10 @@ class _SessionRegistry:
             return self._sessions[browser_name]
 
     def get(self, browser_name: str | None = None) -> _BrowserSession:
-        if not browser_name:
-            browser_name = self._active_browser or _detect_default_browser()
+        if _is_browseros_running():
+            browser_name = "browseros"
+        elif not browser_name:
+            browser_name = self._active_browser or "browseros"
         browser_name = _ALIASES.get(browser_name.lower().strip(), browser_name.lower().strip())
         sess = self._get_or_create(browser_name)
         self._active_browser = browser_name
@@ -799,6 +881,130 @@ class _SessionRegistry:
             return "Open browsers:\n" + "\n".join(lines)
 
 
+def focus_browseros() -> bool:
+    if _OS != "Windows":
+        return False
+    try:
+        import win32gui
+        import win32process
+        import win32con
+        import win32api
+        import ctypes
+        import psutil
+    except ImportError:
+        return False
+
+    # Find the PID of the BrowserOS chrome.exe process
+    target_pids = []
+    for proc in psutil.process_iter(['pid', 'name', 'exe']):
+        try:
+            exe_path = proc.info['exe']
+            if exe_path and "browseros" in exe_path.lower() and "chrome.exe" in exe_path.lower():
+                target_pids.append(proc.info['pid'])
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+
+    if not target_pids:
+        return False
+
+    # Enumerate windows to find the HWNDs belonging to these PIDs
+    hwnds = []
+    def enum_windows_callback(hwnd, extra):
+        if win32gui.IsWindowVisible(hwnd):
+            _, win_pid = win32process.GetWindowThreadProcessId(hwnd)
+            if win_pid in target_pids:
+                title = win32gui.GetWindowText(hwnd)
+                if title:
+                    hwnds.append((hwnd, title))
+        return True
+
+    try:
+        win32gui.EnumWindows(enum_windows_callback, None)
+    except Exception:
+        return False
+
+    if not hwnds:
+        return False
+
+    # Focus the first window found (main browser window)
+    hwnd, title = hwnds[0]
+    print(f"[Browser] Focusing BrowserOS window: '{title}' (HWND: {hwnd})")
+
+    # 1. Restore if minimized (iconic)
+    try:
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        else:
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOWNORMAL)
+    except Exception:
+        pass
+
+    # 2. SwitchToThisWindow API
+    try:
+        ctypes.windll.user32.SwitchToThisWindow(hwnd, True)
+        time.sleep(0.05)
+    except Exception:
+        pass
+
+    # 3. Z-Order Force lift (Topmost -> Notopmost)
+    try:
+        win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0, 
+                              win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
+        time.sleep(0.02)
+        win32gui.SetWindowPos(hwnd, win32con.HWND_NOTOPMOST, 0, 0, 0, 0, 
+                              win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
+    except Exception:
+        pass
+
+    # 4. Try to set foreground directly
+    try:
+        if win32gui.SetForegroundWindow(hwnd):
+            win32gui.SetFocus(hwnd)
+            return True
+    except Exception:
+        pass
+
+    # 5. AttachThreadInput trick
+    try:
+        fore_window = win32gui.GetForegroundWindow()
+        fore_thread = win32process.GetWindowThreadProcessId(fore_window)[0]
+        app_thread = win32api.GetCurrentThreadId()
+        if fore_thread != app_thread:
+            win32process.AttachThreadInput(fore_thread, app_thread, True)
+            success = win32gui.SetForegroundWindow(hwnd)
+            if success:
+                win32gui.SetFocus(hwnd)
+            win32process.AttachThreadInput(fore_thread, app_thread, False)
+            if success:
+                return True
+    except Exception:
+        pass
+
+    # 6. Alt-key press trick
+    try:
+        ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
+        success = win32gui.SetForegroundWindow(hwnd)
+        if success:
+            win32gui.SetFocus(hwnd)
+        ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)
+        if success:
+            return True
+    except Exception:
+        pass
+
+    # 7. Fallback show/focus
+    try:
+        win32gui.SetForegroundWindow(hwnd)
+        win32gui.BringWindowToTop(hwnd)
+        win32gui.SetActiveWindow(hwnd)
+        return True
+    except Exception:
+        pass
+
+    return False
+
+
 _registry = _SessionRegistry()
 
 def browser_control(
@@ -815,6 +1021,8 @@ def browser_control(
     if action == "switch":
         target = browser or params.get("target", "").lower().strip()
         result = _registry.switch(target) if target else "Please specify a browser."
+        if (target == "browseros" or _registry._active_browser == "browseros") and _is_browseros_running():
+            focus_browseros()
         _log(player, result)
         return result
 
@@ -838,8 +1046,12 @@ def browser_control(
     try:
         if action == "go_to":
             result = sess.run(sess.go_to(params.get("url", "")))
+            if sess.browser_name == "browseros":
+                focus_browseros()
         elif action == "search":
             result = sess.run(sess.search(params.get("query", ""), params.get("engine", "google")))
+            if sess.browser_name == "browseros":
+                focus_browseros()
         elif action == "click":
             result = sess.run(sess.click(params.get("selector"), params.get("text")))
         elif action == "type":
@@ -861,6 +1073,8 @@ def browser_control(
             result = sess.run(sess.press(params.get("key", "Enter")))
         elif action == "new_tab":
             result = sess.run(sess.new_tab(params.get("url", "")))
+            if sess.browser_name == "browseros":
+                focus_browseros()
         elif action == "close_tab":
             result = sess.run(sess.close_tab())
         elif action == "screenshot":

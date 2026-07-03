@@ -115,6 +115,27 @@ def _open_app(app_name: str) -> bool:
 
 
 def _open_browser_url(url: str) -> bool:
+    try:
+        import urllib.request
+        browseros_running = False
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:9200/health", timeout=1) as response:
+                browseros_running = (response.status == 200)
+        except Exception:
+            pass
+
+        if browseros_running:
+            try:
+                from actions.browser_control import browser_control
+                print(f"[SendMessage] Opening URL in BrowserOS: {url}")
+                browser_control({"action": "go_to", "url": url})
+                time.sleep(3.0)
+                return True
+            except Exception as e:
+                print(f"[SendMessage] ⚠️ Failed to open in BrowserOS: {e}")
+    except Exception as e:
+        print(f"[SendMessage] ⚠️ BrowserOS check failed: {e}")
+
     import webbrowser
     try:
         webbrowser.open(url)

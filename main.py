@@ -1,8 +1,22 @@
+import sys
+# Force stdout/stderr to utf-8 encoding to prevent CP1252/UnicodeEncodeError on Windows
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+if hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 import asyncio
+import os
+os.environ["QT_LOGGING_RULES"] = "qt.qpa.window.warning=false"
 import re
 import threading
 import json
-import sys
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -75,6 +89,8 @@ from actions.web_search        import web_search as web_search_action
 from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
 from actions.system_monitor    import SystemMonitor, get_system_status
+from actions.ytmusic_control   import ytmusic_control
+from actions.taskbar_manager   import list_taskbar_apps, get_active_window
 
 
 def get_base_dir():
@@ -86,11 +102,146 @@ def get_base_dir():
 BASE_DIR        = get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 PROMPT_PATH     = BASE_DIR / "core" / "prompt.txt"
-LIVE_MODEL          = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+LIVE_MODEL          = "models/gemini-3.1-flash-live-preview"
 CHANNELS            = 1
 SEND_SAMPLE_RATE    = 16000
 RECEIVE_SAMPLE_RATE = 24000
 CHUNK_SIZE          = 1024
+
+def convert_schema_to_uppercase(schema: dict) -> dict:
+    ALLOWED_KEYS = {"type", "description", "properties", "required", "items", "enum", "format", "nullable"}
+
+    def helper(s, is_properties_dict=False):
+        if not isinstance(s, dict):
+            return s
+        new_s = {}
+        for k, v in s.items():
+            if is_properties_dict:
+                if isinstance(v, dict):
+                    new_s[k] = helper(v, is_properties_dict=False)
+                elif isinstance(v, list):
+                    new_s[k] = [helper(item, is_properties_dict=False) if isinstance(item, dict) else item for item in v]
+                else:
+                    new_s[k] = v
+                continue
+
+            if k not in ALLOWED_KEYS:
+                continue
+            if k == "type":
+                if isinstance(v, str):
+                    new_s[k] = v.upper()
+                elif isinstance(v, list):
+                    items = [item.upper() for item in v if isinstance(item, str)]
+                    if "STRING" in items:
+                        new_s[k] = "STRING"
+                    elif "NUMBER" in items:
+                        new_s[k] = "NUMBER"
+                    elif "INTEGER" in items:
+                        new_s[k] = "INTEGER"
+                    elif "BOOLEAN" in items:
+                        new_s[k] = "BOOLEAN"
+                    elif "ARRAY" in items:
+                        new_s[k] = "ARRAY"
+                    elif "OBJECT" in items:
+                        new_s[k] = "OBJECT"
+                    elif items:
+                        new_s[k] = items[0]
+                    else:
+                        new_s[k] = "STRING"
+                else:
+                    new_s[k] = "STRING"
+            elif k == "properties" and isinstance(v, dict):
+                new_s[k] = helper(v, is_properties_dict=True)
+            elif isinstance(v, dict):
+                new_s[k] = helper(v, is_properties_dict=False)
+            elif isinstance(v, list):
+                new_s[k] = [helper(item, is_properties_dict=False) if isinstance(item, dict) else item for item in v]
+            else:
+                new_s[k] = v
+        return new_s
+
+    uppercased = helper(schema, is_properties_dict=False)
+    cleaned = {}
+    for key in ["type", "properties", "required"]:
+        if key in uppercased:
+            cleaned[key] = uppercased[key]
+    return cleaned
+
+async def fetch_browseros_mcp_tools() -> list:
+    import httpx
+    try:
+        async with httpx.AsyncClient() as client:
+            list_payload = {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list"
+            }
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream"
+            }
+            resp = await client.post("http://127.0.0.1:9200/mcp", json=list_payload, headers=headers, timeout=3.0)
+            resp.raise_for_status()
+            res_json = resp.json()
+            mcp_tools = res_json.get("result", {}).get("tools", [])
+            
+            declarations = []
+            for tool in mcp_tools:
+                name = tool.get("name")
+                desc = tool.get("description")
+                input_schema = tool.get("inputSchema", {})
+                parameters = convert_schema_to_uppercase(input_schema)
+                
+                declarations.append({
+                    "name": name,
+                    "description": desc,
+                    "parameters": parameters
+                })
+            print(f"[BrowserOS MCP] Dynamic tool registration: Loaded {len(declarations)} tools.")
+            return declarations
+    except Exception as e:
+        print(f"[BrowserOS MCP] Could not load MCP tools: {e}")
+        return []
+
+async def call_browseros_mcp_tool(name: str, arguments: dict) -> dict:
+    import httpx
+    init_payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "alice-assistant",
+                "version": "1.0.0"
+            }
+        }
+    }
+    call_payload = {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": name,
+            "arguments": arguments
+        },
+        "id": 2
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream"
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            await client.post("http://127.0.0.1:9200/mcp", json=init_payload, headers=headers, timeout=5.0)
+        except Exception:
+            pass  # If initialization fails, try calling the tool anyway
+        resp = await client.post("http://127.0.0.1:9200/mcp", json=call_payload, headers=headers, timeout=120.0)
+        resp.raise_for_status()
+        res_json = resp.json()
+        if "error" in res_json:
+            raise Exception(f"MCP Tool Error: {res_json['error']}")
+        return res_json.get("result", {})
 
 def _get_api_key() -> str:
     with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -146,6 +297,30 @@ TOOL_DECLARATIONS = [
                 }
             },
             "required": ["app_name"]
+        }
+    },
+    {
+        "name": "list_taskbar_apps",
+        "description": (
+            "Returns a list of all active application windows visible on the user's taskbar. "
+            "Use this when the user asks what applications are currently open, running, "
+            "or active on the taskbar."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {},
+        }
+    },
+    {
+        "name": "get_active_window",
+        "description": (
+            "Returns the window title and executable process name of the active foreground window currently in focus on the user's desktop. "
+            "Use this whenever the user asks an ambiguous question (like 'how to do this', 'explain this', 'how to cut video') "
+            "to check what application they are actively working on before answering."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {},
         }
     },
     {
@@ -205,6 +380,26 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "ytmusic_control",
+        "description": (
+            "Controls YouTube Music Desktop App. "
+            "Use for playing music, pausing, skipping tracks, setting volume, "
+            "liking/disliking songs, checking current playing status, or managing queue. "
+            "Actions: play | pause | toggle_play | next | previous | like | dislike | set_volume | status | queue | clear_queue | authenticate. "
+            "For 'play' action, pass 'query' to search and play a song, or 'video_id' to play a specific video/track directly."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action":      {"type": "STRING", "description": "play | pause | toggle_play | next | previous | like | dislike | set_volume | status | queue | clear_queue | authenticate"},
+                "query":       {"type": "STRING", "description": "Search query for play/queue action"},
+                "video_id":    {"type": "STRING", "description": "Specific YouTube video/track ID to play or queue"},
+                "volume":      {"type": "INTEGER", "description": "Volume level 0-100 (for set_volume action)"}
+            },
+            "required": ["action"]
+        }
+    },
+    {
         "name": "reminder",
         "description": "Sets a timed reminder using Task Scheduler.",
         "parameters": {
@@ -239,10 +434,11 @@ TOOL_DECLARATIONS = [
         "name": "screen_process",
         "description": (
             "Captures and analyzes the screen or webcam image. "
-            "MUST be called when user asks what is on screen, what you see, "
-            "analyze my screen, look at camera, etc. "
-            "You have NO visual ability without this tool. "
-            "After calling this tool, stay SILENT — the vision module speaks directly."
+            "Returns a textual analysis of the captured display/camera. "
+            "MUST be called when the user asks what is on screen, what you see, "
+            "to look at the camera, analyze the display, etc. "
+            "CRITICAL: Do NOT use this for inspecting web pages or browser contents if BrowserOS or another browser is running; "
+            "use browser_control with action='get_text' or action='screenshot' instead to retrieve precise text or visual content."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -266,7 +462,7 @@ TOOL_DECLARATIONS = [
             "properties": {
                 "action":      {"type": "STRING", "description": "The action to perform"},
                 "description": {"type": "STRING", "description": "Natural language description of what to do"},
-                "value":       {"type": "STRING", "description": "Optional value: volume level, text to type, etc."}
+                "value":       {"type": "STRING", "description": "Optional value: volume level (absolute like 50, or relative like -10, +20), text to type, etc."}
             },
             "required": []
         }
@@ -277,13 +473,18 @@ TOOL_DECLARATIONS = [
             "Controls any web browser. Use for: opening websites, searching the web, "
             "clicking elements, filling forms, scrolling, screenshots, navigation, any web-based task. "
             "Always pass the 'browser' parameter when the user specifies a browser (e.g. 'open in Edge', "
-            "'use Firefox', 'open Chrome'). Multiple browsers can run simultaneously."
+            "'use Firefox', 'open Chrome', 'use BrowserOS'). Multiple browsers can run simultaneously. "
+            "If BrowserOS is running, 'browseros' is the default and connects directly to the user's active "
+            "BrowserOS window on port 9100, allowing real-time desktop browser control. "
+            "CRITICAL: When the user asks about the active web page (what is on the website, read the text, "
+            "what does it say, extract data, check the page), always prefer browser_control with action='get_text' "
+            "or action='screenshot' over screen_process to get direct page data."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "action":      {"type": "STRING", "description": "go_to | search | click | type | scroll | fill_form | smart_click | smart_type | get_text | get_url | press | new_tab | close_tab | screenshot | back | forward | reload | switch | list_browsers | close | close_all"},
-                "browser":     {"type": "STRING", "description": "Target browser: chrome | edge | firefox | opera | operagx | brave | vivaldi | safari. Omit to use the currently active browser."},
+                "browser":     {"type": "STRING", "description": "Target browser: browseros | chrome | edge | firefox | opera | operagx | brave | vivaldi | safari. Omit to use the currently active browser."},
                 "url":         {"type": "STRING", "description": "URL for go_to / new_tab action"},
                 "query":       {"type": "STRING", "description": "Search query for search action"},
                 "engine":      {"type": "STRING", "description": "Search engine: google | bing | duckduckgo | yandex (default: google)"},
@@ -557,12 +758,19 @@ class JarvisLive:
         self._phone_active  = False   # True while phone mic is streaming; pauses PC mic
         self.ui.on_text_command  = self._on_text_command
         self.ui.on_remote_clicked = self._make_remote_key
+        self.ui._win.on_escape_pressed = self.handle_interruption
         self._turn_done_event: asyncio.Event | None = None
         self._dashboard     = None
         self._briefing_sent = False          # morning briefing fires once per process
         self._sys_monitor   = SystemMonitor()  # persistent cooldown state
         self._last_voice_time = 0.0
         self._play_stream     = None
+        self._turn_count      = 0
+        self.mcp_tools        = []
+        self._wake_event      = None
+        import time
+        self._last_activity_time = time.time()
+        self.ui._win.on_wake_requested = self._wake_up
 
     def _make_remote_key(self):
         """Called from Qt main thread when user presses Remote Control."""
@@ -577,7 +785,32 @@ class JarvisLive:
         manual = self._dashboard.get_manual_url()
         return url, key, f"{url}/auto-login?key={key}", manual
 
+    def _wake_up(self):
+        import time
+        self._last_activity_time = time.time()
+        if self._wake_event and not self._wake_event.is_set():
+            print("[ALICE] Waking up session...")
+            if self._loop:
+                self._loop.call_soon_threadsafe(self._wake_event.set)
+
     def _on_text_command(self, text: str):
+        import time
+        self._last_activity_time = time.time()
+        self._wake_up()
+
+        cmd = text.strip().lower()
+        if cmd in ["stop", "/stop", "quiet", "diam", "cancel", "shutup", "batal"]:
+            self.handle_interruption()
+            self.ui.write_log("SYS: Interrupted speech by user command.")
+            return
+
+        if cmd in ["reset", "/reset", "restart", "refresh"]:
+            self.handle_interruption()
+            self.ui.write_log("SYS: Rotating session manually...")
+            if self.session and self._loop:
+                asyncio.run_coroutine_threadsafe(self.session.close(), self._loop)
+            return
+
         if text.strip().lower().startswith("hermes ") or text.strip().startswith("/hermes "):
             query = text.strip()
             if query.startswith("/hermes "):
@@ -590,7 +823,7 @@ class JarvisLive:
                 self.ui.write_log(f"Routing to Hermes: {query}")
                 try:
                     import requests
-                    res = requests.post("http://100.69.16.104:8080/api/hermes/ask", json={"query": query}, timeout=10)
+                    res = requests.post("http://192.168.0.102:8080/api/hermes/ask", json={"query": query}, timeout=10)
                     if res.status_code == 200:
                         res_data = res.json()
                         if res_data.get("status") == "queued":
@@ -618,10 +851,7 @@ class JarvisLive:
         if not self._loop or not self.session:
             return
         asyncio.run_coroutine_threadsafe(
-            self.session.send_client_content(
-                turns={"parts": [{"text": text}]},
-                turn_complete=True
-            ),
+            self.session.send_realtime_input(text=text),
             self._loop
         )
 
@@ -630,23 +860,44 @@ class JarvisLive:
             self._is_speaking = value
         if value:
             self.ui.set_state("SPEAKING")
-        elif not self.ui.muted:
-            self.ui.set_state("LISTENING")
+        else:
+            if not self.ui.muted:
+                self.ui.set_state("LISTENING")
+            self.ui.set_speaking_volume(0.0)
 
     def speak(self, text: str):
         if not self._loop or not self.session:
             return
         asyncio.run_coroutine_threadsafe(
-            self.session.send_client_content(
-                turns={"parts": [{"text": text}]},
-                turn_complete=True
-            ),
+            self.session.send_realtime_input(text=text),
             self._loop
         )
 
+    async def speak_when_ready(self, text: str):
+        while True:
+            with self._speaking_lock:
+                alice_speaking = self._is_speaking
+            queue_empty = self.audio_in_queue.empty() if self.audio_in_queue else True
+            if not alice_speaking and queue_empty:
+                break
+            await asyncio.sleep(0.5)
+            
+        # Give a small pause (1.0 second) for natural conversation transition
+        await asyncio.sleep(1.0)
+        
+        while True:
+            with self._speaking_lock:
+                alice_speaking = self._is_speaking
+            queue_empty = self.audio_in_queue.empty() if self.audio_in_queue else True
+            if not alice_speaking and queue_empty:
+                break
+            await asyncio.sleep(0.5)
+            
+        self.speak(text)
+
     async def _poll_hermes_task(self, task_id: str, query: str):
         self.ui.write_log(f"SYS: Started polling task {task_id}")
-        url = f"http://100.69.16.104:8080/api/hermes/task/{task_id}"
+        url = f"http://192.168.0.102:8080/api/hermes/task/{task_id}"
         
         await asyncio.sleep(2)
         
@@ -672,12 +923,12 @@ class JarvisLive:
                 self.ui.write_log(f"HERMES: Task {task_id} completed.")
                 if hasattr(self.ui, "show_content"):
                     self.ui.show_content(f"HERMES RESPONSE ({task_id})", response)
-                self.speak(f"Sir, task {task_id} has been completed on the Hermes server. Here is the response:\n{response}")
+                await self.speak_when_ready(f"Sir, task {task_id} has been completed on the Hermes server. Here is the response:\n{response}")
                 break
             elif status == "failed":
                 response = data.get("response", "Unknown failure.")
                 self.ui.write_log(f"HERMES: Task {task_id} failed.")
-                self.speak(f"Sir, the task {task_id} on Hermes server has failed: {response}")
+                await self.speak_when_ready(f"Sir, the task {task_id} on Hermes server has failed: {response}")
                 break
             elif status == "error":
                 message = data.get("message", "")
@@ -717,7 +968,7 @@ class JarvisLive:
         # Try to pull synced memory from Armbian server (Honcho)
         mem_str = ""
         try:
-            res = requests.get("http://100.69.16.104:8080/api/hermes/memory", timeout=5)
+            res = requests.get("http://192.168.0.102:8080/api/hermes/memory", timeout=5)
             if res.status_code == 200:
                 mem_str = res.json().get("prompt_string", "")
                 print("[Memory] Dynamically loaded Honcho memory from server.")
@@ -744,12 +995,20 @@ class JarvisLive:
             parts.append(mem_str)
         parts.append(sys_prompt)
 
+        combined_tools = TOOL_DECLARATIONS.copy()
+        if hasattr(self, 'mcp_tools') and self.mcp_tools:
+            combined_tools.extend(self.mcp_tools)
+
+        system_instruction_content = types.Content(
+            parts=[types.Part.from_text(text="\n".join(parts))]
+        )
+
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             output_audio_transcription={},
             input_audio_transcription={},
-            system_instruction="\n".join(parts),
-            tools=[{"function_declarations": TOOL_DECLARATIONS}],
+            system_instruction=system_instruction_content,
+            tools=[{"function_declarations": combined_tools}],
             session_resumption=types.SessionResumptionConfig(),
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
@@ -778,7 +1037,7 @@ class JarvisLive:
                 try:
                     import requests
                     requests.post(
-                        "http://100.69.16.104:8080/api/hermes/memory/save",
+                        "http://192.168.0.102:8080/api/hermes/memory/save",
                         json={"category": category, "key": key, "value": value},
                         timeout=5
                     )
@@ -803,7 +1062,7 @@ class JarvisLive:
                     import requests
                     try:
                         res = requests.post(
-                            "http://100.69.16.104:8080/api/hermes/ask",
+                            "http://192.168.0.102:8080/api/hermes/ask",
                             json={"query": query},
                             timeout=10
                         )
@@ -827,6 +1086,14 @@ class JarvisLive:
                 r = await loop.run_in_executor(None, lambda: open_app(parameters=args, response=None, player=self.ui))
                 result = r or f"Opened {args.get('app_name')}."
 
+            elif name == "list_taskbar_apps":
+                r = await loop.run_in_executor(None, lambda: list_taskbar_apps(parameters=args, player=self.ui))
+                result = r or "Done."
+
+            elif name == "get_active_window":
+                r = await loop.run_in_executor(None, lambda: get_active_window(parameters=args, player=self.ui))
+                result = r or "Done."
+
             elif name == "weather_report":
                 r = await loop.run_in_executor(None, lambda: weather_action(parameters=args, player=self.ui))
                 result = r or "Weather delivered."
@@ -843,6 +1110,10 @@ class JarvisLive:
                 r = await loop.run_in_executor(None, lambda: send_message(parameters=args, response=None, player=self.ui, session_memory=None))
                 result = r or f"Message sent to {args.get('receiver')}."
 
+            elif name == "ytmusic_control":
+                r = await loop.run_in_executor(None, lambda: ytmusic_control(parameters=args, player=self.ui))
+                result = r or "Done."
+
             elif name == "reminder":
                 r = await loop.run_in_executor(None, lambda: reminder(parameters=args, response=None, player=self.ui))
                 result = r or "Reminder set."
@@ -852,13 +1123,8 @@ class JarvisLive:
                 result = r or "Done."
 
             elif name == "screen_process":
-                threading.Thread(
-                    target=screen_process,
-                    kwargs={"parameters": args, "response": None,
-                            "player": self.ui, "session_memory": None},
-                    daemon=True
-                ).start()
-                result = "Vision module activated. Stay completely silent — vision module will speak directly."
+                r = await loop.run_in_executor(None, lambda: screen_process(parameters=args, player=self.ui))
+                result = r or "Vision module failed to analyze screen."
 
             elif name == "computer_settings":
                 r = await loop.run_in_executor(None, lambda: computer_settings(parameters=args, response=None, player=self.ui))
@@ -920,7 +1186,20 @@ class JarvisLive:
                 threading.Thread(target=_shutdown, daemon=True).start()
 
             else:
-                result = f"Unknown tool: {name}"
+                builtins = {
+                    "ask_hermes", "open_app", "weather_report", "browser_control", 
+                    "file_controller", "send_message", "ytmusic_control", "reminder", 
+                    "youtube_video", "screen_process", "computer_settings", 
+                    "desktop_control", "code_helper", "dev_agent", "web_search",
+                    "file_processor", "computer_control", "game_updater", "flight_finder",
+                    "system_status", "shutdown_alice", "save_memory"
+                }
+                if name not in builtins:
+                    print(f"[ALICE] Forwarding {name} call to BrowserOS MCP server...")
+                    mcp_res = await call_browseros_mcp_tool(name, args)
+                    result = mcp_res
+                else:
+                    result = f"Unknown tool: {name}"
 
         except Exception as e:
             result = f"Tool '{name}' failed: {e}"
@@ -931,15 +1210,16 @@ class JarvisLive:
             self.ui.set_state("LISTENING")
 
         print(f"[ALICE] 📤 {name} → {str(result)[:80]}")
+        resp_data = result if isinstance(result, dict) else {"result": result}
         return types.FunctionResponse(
             id=fc.id, name=name,
-            response={"result": result}
+            response=resp_data
         )
 
     async def _send_realtime(self):
         while True:
             msg = await self.out_queue.get()
-            await self.session.send_realtime_input(media=msg)
+            await self.session.send_realtime_input(audio=msg)
 
     async def _listen_audio(self):
         print("[ALICE] 🎤 Mic started")
@@ -949,27 +1229,39 @@ class JarvisLive:
             if status:
                 print(f"[ALICE] 🎤 Mic status warning: {status}")
             
+            import time
+            now = time.time()
             try:
                 import numpy as np
-                import time
-                rms = np.sqrt(np.mean(indata**2)) if len(indata) > 0 else 0
-                now = time.time()
-                if rms > 200:
+                mean_val = np.nanmean(indata**2) if len(indata) > 0 else 0
+                rms = np.sqrt(max(0.0, mean_val)) if not np.isnan(mean_val) else 0.0
+                
+                with self._speaking_lock:
+                    alice_speaking = self._is_speaking
+                
+                threshold = 800 if alice_speaking else 200
+                
+                if rms > threshold:
                     self._last_voice_time = now
+                    self._last_activity_time = now
                     loop.call_soon_threadsafe(self.ui.set_user_speaking, True)
                 elif now - self._last_voice_time > 0.8:
                     loop.call_soon_threadsafe(self.ui.set_user_speaking, False)
             except Exception:
-                pass
+                alice_speaking = False
 
-            with self._speaking_lock:
-                alice_speaking = self._is_speaking
-            if not alice_speaking and not self.ui.muted and not self._phone_active:
+            should_block_mic = alice_speaking and not self.ui.voice_interrupt_enabled
+            
+            if alice_speaking and self.ui.voice_interrupt_enabled:
+                if now - self._last_voice_time > 0.3:
+                    should_block_mic = True
+
+            if not should_block_mic and not self.ui.muted and not self._phone_active:
                 data = indata.tobytes()
                 try:
                     loop.call_soon_threadsafe(
                         self.out_queue.put_nowait,
-                        {"data": data, "mime_type": "audio/pcm"}
+                        {"data": data, "mime_type": "audio/pcm;rate=16000"}
                     )
                 except Exception:
                     pass
@@ -1035,6 +1327,11 @@ class JarvisLive:
                             if self._turn_done_event:
                                 self._turn_done_event.set()
 
+                            self._turn_count += 1
+                            if self._turn_count >= 12:
+                                self.ui.write_log("SYS: Session rotated to maintain low latency.")
+                                asyncio.create_task(self.session.close())
+
                             full_in = " ".join(in_buf).strip()
                             if full_in:
                                 self.ui.write_log(f"You: {full_in}")
@@ -1067,8 +1364,15 @@ class JarvisLive:
                             function_responses=fn_responses
                         )
         except Exception as e:
-            print(f"[ALICE] ❌ Recv: {e}")
-            traceback.print_exc()
+            import websockets
+            from google.genai import errors as gerrors
+            is_normal = (
+                isinstance(e, websockets.exceptions.ConnectionClosedOK) or
+                (isinstance(e, gerrors.APIError) and e.code == 1000)
+            )
+            if not is_normal:
+                print(f"[ALICE] ❌ Recv: {e}")
+                traceback.print_exc()
             raise
 
     async def _play_audio(self):
@@ -1086,6 +1390,7 @@ class JarvisLive:
                     )
                     idle_ticks = 0
                 except asyncio.TimeoutError:
+                    self.ui.set_speaking_volume(0.0)
                     if stream is not None:
                         idle_ticks += 1
                         if idle_ticks >= 5: # 0.5s of silence
@@ -1114,7 +1419,6 @@ class JarvisLive:
                             samplerate=RECEIVE_SAMPLE_RATE,
                             channels=CHANNELS,
                             dtype="int16",
-                            blocksize=CHUNK_SIZE,
                         )
                         stream.start()
                         self._play_stream = stream
@@ -1123,6 +1427,30 @@ class JarvisLive:
                         continue
 
                 try:
+                    # hitung RMS volume dan pitch frekuensi dominan dari chunk audio (dtype int16)
+                    import numpy as np
+                    samples = np.frombuffer(chunk, dtype=np.int16)
+                    if len(samples) > 0:
+                        # hitung RMS
+                        mean_val = np.mean(samples.astype(np.float32) ** 2)
+                        rms = np.sqrt(mean_val) if mean_val > 0 else 0.0
+                        vol = min(1.0, rms / 3000.0)
+                        
+                        # hitung Pitch Dominan via FFT
+                        freq_norm = 0.5
+                        try:
+                            fft_data = np.abs(np.fft.rfft(samples))
+                            freqs = np.fft.rfftfreq(len(samples), d=1.0/RECEIVE_SAMPLE_RATE)
+                            if len(fft_data) > 1:
+                                dom_idx = np.argmax(fft_data[1:]) + 1
+                                dom_freq = freqs[dom_idx]
+                                # Normalisasi range frekuensi suara manusia vocal range (80 Hz s.d 800 Hz)
+                                freq_norm = max(0.0, min(1.0, (dom_freq - 80.0) / 720.0))
+                        except Exception:
+                            pass
+                        
+                        self.ui.set_speaking_volume(vol, freq_norm)
+
                     await asyncio.to_thread(stream.write, chunk)
                 except Exception as we:
                     print(f"[ALICE] Play chunk error (possibly stream closed): {we}")
@@ -1173,13 +1501,24 @@ class JarvisLive:
         time_str = datetime.now().strftime("%H:%M")
 
         # ── Phase 1: instant greeting — zero data needed ──────────────────────
+        import random
+        greetings_pool = [
+            "Cheerful / Friendly Peer style: Speak in a very warm, casual, and smiley tone. Use casual terms like 'nih', 'deh', 'yuk', 'ya'. Choose pronouns 'aku' and 'kamu'. Example: 'Halo Ham! Selamat pagi/siang. Udah jam {time_str} nih, hari ini ada project seru apa yang mau kita garap bareng?'",
+            "Casual Developer Buddy style: Speak like an active coder buddy. Keep it relaxed, using tech slang. Choose pronouns 'aku' and 'kamu'. Example: 'Oy Ham! Sistem ALICE udah up nih pukul {time_str}. Mau lanjut ngoding atau debug apa kita hari ini? Gas lah!'",
+            "Warm / Caring Helper style: Speak gently and politely but fully casual. Choose pronouns 'aku' and 'kamu'. Example: 'Halo Ham, selamat pagi/siang/sore. Semoga hari kamu lancar ya. Aku udah online di jam {time_str} nih, siap nemenin kamu ngoding hari ini.'",
+            "Sleek Tech Companion style: Clean, quick, modern but casual. Choose pronouns 'aku' and 'kamu'. Example: 'Sistem online, Ham. Pukul {time_str}, all modules are running. Mau lanjutin codingan yang mana nih?'",
+            "Playful / High Energy style: Express excitement and positive vibes. Choose pronouns 'aku' and 'kamu'. Example: 'Halo Ham! Ketemu lagi kita. Pas banget udah jam {time_str}, yuk kita bikin sesuatu yang keren hari ini! Ada code yang mau dieksekusi?'",
+        ]
+        chosen_style = random.choice(greetings_pool).format(time_str=time_str)
+
         p1_lines = [
             "[STARTUP_GREETING] Greet the user immediately and naturally.",
             "Identity: You are A.L.I.C.E, a friendly female AI assistant companion.",
             f"Current time: {time_str}.",
-            "- Say hello in a warm, relaxed, and non-monotonous way (be creative and choose a friendly variation each time: cozy, cheerful, or sleek high-tech).",
-            "- Mention the time/hour naturally.",
-            "- Express readiness to assist Ham with his coding, projects, or tasks today.",
+            "Strict Guideline: Use pronouns 'aku' (for yourself) and 'kamu' (for the user) ONLY. Never use formal terms like 'saya', 'Anda', or formal templates. Speak in extremely casual, natural, and friendly Indonesian Ragam Santai (casual Indonesian mixed with English tech terms), just like a real human coworker/friend.",
+            f"Style constraint to adopt: {chosen_style}",
+            "- Mention the time/hour naturally as shown in the style.",
+            "- Keep it natural and simple, do NOT add generic questions like 'Ada yang bisa kubantu lagi?' or 'Ada yang mau dibantu?' at the end.",
             "- Keep it brief (1-2 sentences max).",
             "- Do NOT call any tools. Do NOT say [STARTUP_GREETING].",
             "- Respond in "
@@ -1188,9 +1527,8 @@ class JarvisLive:
         if name:
             p1_lines.append(f"- Address the user as {name} (or 'Ham').")
 
-        await self.session.send_client_content(
-            turns={"parts": [{"text": '\n'.join(p1_lines)}]},
-            turn_complete=True,
+        await self.session.send_realtime_input(
+            text='\n'.join(p1_lines)
         )
         self.ui.write_log("SYS: Briefing phase 1 (greeting) sent.")
 
@@ -1265,15 +1603,14 @@ class JarvisLive:
             "Voice rules:",
             "- Mention ONLY 2 headlines — one short sentence each.",
             "- Tell the user the full list is visible on screen.",
-            "- Ask if they need anything.",
+            "- Do NOT ask if they need anything, do NOT use any generic/repetitive questions at the end.",
             "- Do NOT say [BRIEFING_NEWS].",
             "- Respond in "
             + (f"language: {lang}." if lang else "the user's language."),
         ]
 
-        await self.session.send_client_content(
-            turns={"parts": [{"text": '\n'.join(p2_lines)}]},
-            turn_complete=True,
+        await self.session.send_realtime_input(
+            text='\n'.join(p2_lines)
         )
         self.ui.write_log("SYS: Briefing phase 2 (news) sent.")
 
@@ -1286,12 +1623,32 @@ class JarvisLive:
             alert = await asyncio.to_thread(self._sys_monitor.check)
             if alert and self.session:
                 try:
-                    await self.session.send_client_content(
-                        turns={"parts": [{"text": alert}]},
-                        turn_complete=True,
+                    await self.session.send_realtime_input(
+                        text=alert
                     )
                 except Exception as e:
                     print(f"[Monitor] ⚠️ Could not send alert: {e}")
+
+    async def _idle_watchdog(self) -> None:
+        """Watchdog to sleep the live session after 5 minutes of inactivity."""
+        import time
+        while True:
+            await asyncio.sleep(10)
+            if self.session:
+                now = time.time()
+                with self._speaking_lock:
+                    speaking = self._is_speaking
+                elapsed = now - max(self._last_voice_time, self._last_activity_time)
+                # If idle for 5 mins (300s) and not speaking, put session to sleep
+                if elapsed > 300.0 and not speaking:
+                    print(f"[ALICE] Idle for {int(elapsed)}s. Disconnecting session to conserve API quota.")
+                    self.ui.write_log("SYS: Standby mode (idle). Alt+Space or unmute/text to wake up.")
+                    if self._wake_event:
+                        self._wake_event.clear()
+                    try:
+                        await self.session.close()
+                    except Exception:
+                        pass
 
     # ── Phone audio relay ────────────────────────────────────────────────────────
 
@@ -1328,15 +1685,15 @@ class JarvisLive:
                 )
                 if not text:
                     continue
+                self._wake_up()
                 # Wait up to 8s for session to become ready after a wake
                 for _ in range(80):
                     if self.session:
                         break
                     await asyncio.sleep(0.1)
                 if self.session:
-                    await self.session.send_client_content(
-                        turns={"parts": [{"text": text}]},
-                        turn_complete=True,
+                    await self.session.send_realtime_input(
+                        text=text
                     )
                     self.ui.write_log(f"[Web]: {text}")
                 else:
@@ -1351,6 +1708,15 @@ class JarvisLive:
 
     async def run(self):
         self._loop = asyncio.get_event_loop()
+        self._wake_event = asyncio.Event()
+        self._wake_event.set()
+
+        # Fetch BrowserOS MCP tools on startup
+        try:
+            self.mcp_tools = await fetch_browseros_mcp_tools()
+        except Exception as e:
+            print(f"[ALICE] Failed fetching MCP tools: {e}")
+            self.mcp_tools = []
 
         client = genai.Client(
             api_key=_get_api_key(),
@@ -1372,18 +1738,29 @@ class JarvisLive:
 
         while True:
             try:
-                print("[ALICE] Connecting...")
+                await self._wake_event.wait()
+                # Try to load live_model override from config
+                live_model = LIVE_MODEL
+                try:
+                    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                        live_model = cfg.get("live_model", live_model)
+                except Exception:
+                    pass
+
+                print(f"[ALICE] Connecting to {live_model}...")
                 self.ui.set_state("THINKING")
                 config = self._build_config()
 
                 async with (
-                    client.aio.live.connect(model=LIVE_MODEL, config=config) as session,
+                    client.aio.live.connect(model=live_model, config=config) as session,
                     asyncio.TaskGroup() as tg,
                 ):
                     self.session          = session
                     self.audio_in_queue   = asyncio.Queue()
                     self.out_queue        = asyncio.Queue(maxsize=200)
                     self._turn_done_event = asyncio.Event()
+                    self._turn_count      = 0
 
                     print("[ALICE] Connected.")
                     self.ui.set_state("LISTENING")
@@ -1397,6 +1774,7 @@ class JarvisLive:
                     tg.create_task(self._receive_audio())
                     tg.create_task(self._play_audio())
                     tg.create_task(self._run_system_monitor())
+                    tg.create_task(self._idle_watchdog())
                     if self._dashboard:
                         tg.create_task(self._relay_phone_audio())
 
@@ -1406,8 +1784,32 @@ class JarvisLive:
                         tg.create_task(self._send_startup_briefing())
 
             except Exception as e:
-                print(f"[ALICE] Error: {e}")
-                traceback.print_exc()
+                is_normal = False
+                try:
+                    import websockets
+                    from google.genai import errors as gerrors
+                    
+                    def check_normal(exc):
+                        if isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
+                            return True
+                        if isinstance(exc, websockets.exceptions.ConnectionClosedOK):
+                            return True
+                        if isinstance(exc, gerrors.APIError) and exc.code == 1000:
+                            return True
+                        if exc.__class__.__name__ in ("BaseExceptionGroup", "ExceptionGroup"):
+                            return all(check_normal(sub) for sub in exc.exceptions)
+                        return False
+                    
+                    if check_normal(e):
+                        is_normal = True
+                except Exception:
+                    pass
+
+                if is_normal:
+                    print("[ALICE] Session closed normally.")
+                else:
+                    print(f"[ALICE] Error: {e}")
+                    traceback.print_exc()
             finally:
                 self.session = None
 

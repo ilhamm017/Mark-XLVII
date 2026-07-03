@@ -82,6 +82,35 @@ def volume_mute():
         subprocess.run(["pactl", "set-sink-mute", "@DEFAULT_SINK@", "toggle"],
             capture_output=True)
 
+def get_current_volume() -> int:
+    if _OS == "Windows":
+        try:
+            from ctypes import cast, POINTER
+            from comtypes import CLSCTX_ALL
+            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+            devices   = AudioUtilities.GetSpeakers()
+            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            vol       = cast(interface, POINTER(IAudioEndpointVolume))
+            return int(round(vol.GetMasterVolumeLevelScalar() * 100))
+        except Exception as e:
+            print(f"[Settings] pycaw get_current_volume failed: {e}")
+            return 50
+    elif _OS == "Darwin":
+        try:
+            res = subprocess.run(["osascript", "-e", "output volume of (get volume settings)"], capture_output=True, text=True)
+            return int(res.stdout.strip())
+        except Exception:
+            return 50
+    else:
+        try:
+            res = subprocess.run(["pactl", "get-sink-volume", "@DEFAULT_SINK@"], capture_output=True, text=True)
+            match = re.search(r"(\d+)%", res.stdout)
+            if match:
+                return int(match.group(1))
+        except Exception:
+            pass
+        return 50
+
 def volume_set(value: int):
     value = max(0, min(100, int(value)))
     if _OS == "Windows":
@@ -623,6 +652,55 @@ def computer_settings(
             value = detected.get("value")
 
     action = raw_action.lower().strip().replace(" ", "_").replace("-", "_")
+
+    # If action is not recognized, fallback to description intent detection
+    known_handlers = ("volume_set", "type_text", "write_on_screen", "type", "write", "press_key", "reload_n", "refresh_n", "reload_page_n", "scroll_up", "scroll_down")
+    if action not in ACTION_MAP and action not in known_handlers:
+        if description:
+            try:
+                detected = _detect_action(description)
+                detected_action = detected.get("action", "").lower().strip().replace(" ", "_").replace("-", "_")
+                if detected_action in ACTION_MAP or detected_action in known_handlers:
+                    action = detected_action
+                    if value is None or not str(value).strip():
+                        value = detected.get("value")
+            except Exception:
+                pass
+
+    # Normalize generic volume action
+    if action == "volume":
+        val_str = str(value or "").strip()
+        if val_str.startswith("-") or val_str.startswith("+"):
+            try:
+                diff = int(val_str)
+                curr = get_current_volume()
+                value = max(0, min(100, curr + diff))
+                action = "volume_set"
+            except ValueError:
+                pass
+        elif val_str.isdigit():
+            action = "volume_set"
+        else:
+            desc_lower = description.lower()
+            if "up" in desc_lower or "increase" in desc_lower or "raise" in desc_lower:
+                action = "volume_up"
+            elif "down" in desc_lower or "decrease" in desc_lower or "lower" in desc_lower:
+                action = "volume_down"
+            elif "mute" in desc_lower:
+                action = "mute"
+            else:
+                action = "volume_set"
+
+    # Support relative volume changes in volume_set
+    if action == "volume_set":
+        try:
+            val_str = str(value or "").strip()
+            if val_str.startswith("-") or val_str.startswith("+"):
+                diff = int(val_str)
+                curr = get_current_volume()
+                value = max(0, min(100, curr + diff))
+        except ValueError:
+            pass
 
     if not action:
         return "No action could be determined."

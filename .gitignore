@@ -1,0 +1,15 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Config tokens
+config/ytmusic_token.txt
+
+# Test scripts & files
+test_*.py
+list_hid_devices.py
+search_response.json
+swagger_doc.json
+*.log

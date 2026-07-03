@@ -64,6 +64,26 @@ def _get_api_key() -> str:
 
 def _open_url(url: str) -> None:
     try:
+        import urllib.request
+        browseros_running = False
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:9200/health", timeout=1) as response:
+                browseros_running = (response.status == 200)
+        except Exception:
+            pass
+
+        if browseros_running:
+            try:
+                from actions.browser_control import browser_control
+                print(f"[YouTube] Opening URL in BrowserOS: {url}")
+                browser_control({"action": "go_to", "url": url})
+                return
+            except Exception as e:
+                print(f"[YouTube] ⚠️ Failed to open in BrowserOS: {e}")
+    except Exception as e:
+        print(f"[YouTube] ⚠️ BrowserOS check failed: {e}")
+
+    try:
         if is_mac():
             subprocess.Popen(["open", url])
         elif is_linux():
@@ -71,7 +91,7 @@ def _open_url(url: str) -> None:
         else:
             subprocess.Popen(["cmd", "/c", "start", "", url], shell=False)
     except Exception as e:
-        print(f"[YouTube] ⚠️ open_url failed: {e}")
+        print(f"[YouTube] ⚠️ open_url fallback failed: {e}")
 
 def _scrape_first_video_url(query: str) -> str | None:
 

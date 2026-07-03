@@ -16,6 +16,18 @@ _SAFE_ROOTS: list[Path] = [
     Path.home(),
 ]
 
+if _OS == "Windows":
+    try:
+        import psutil
+        for part in psutil.disk_partitions():
+            mount = part.mountpoint
+            if mount and mount.upper() != "C:\\":
+                _SAFE_ROOTS.append(Path(mount))
+    except Exception:
+        for drive in ["D:\\", "E:\\", "R:\\", "X:\\", "Y:\\", "Z:\\"]:
+            if Path(drive).exists():
+                _SAFE_ROOTS.append(Path(drive))
+
 def _is_safe_path(target: Path) -> bool:
     """Verilen path _SAFE_ROOTS içinde mi? Değilse işlemi reddet."""
     try:

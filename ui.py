@@ -15,17 +15,17 @@ import psutil
 
 from PyQt6.QtCore import (
     QEasingCurve, QMimeData, QObject, QPointF, QRectF, QSize, Qt,
-    QTimer, QUrl, pyqtSignal,
+    QTimer, QUrl, pyqtSignal, QPropertyAnimation, QRect,
 )
 from PyQt6.QtGui import (
     QBrush, QColor, QDragEnterEvent, QDropEvent, QFont, QFontDatabase,
     QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap,
-    QRadialGradient, QShortcut,
+    QRadialGradient, QShortcut, QIcon,
 )
 from PyQt6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QPushButton, QScrollArea, QSizePolicy, QTextEdit,
-    QVBoxLayout, QWidget, QProgressBar,
+    QVBoxLayout, QWidget, QProgressBar, QSystemTrayIcon, QMenu,
 )
 
 def _base_dir() -> Path:
@@ -245,7 +245,6 @@ _metrics = _SysMetrics()
 class HudCanvas(QWidget):
     def __init__(self, face_path: str, parent=None):
         super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
         self.setMinimumSize(300, 300)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -254,6 +253,10 @@ class HudCanvas(QWidget):
         self.state    = "INITIALISING"
         self.user_speaking = False
         self.mic_active = False
+        self.speaking_volume = 0.0
+        self.speaking_frequency = 0.5
+        self._smooth_vol = 0.0
+        self._smooth_freq = 0.5
 
         self._tick       = 0
         self._scale      = 1.0
@@ -275,6 +278,11 @@ class HudCanvas(QWidget):
         self._tmr.timeout.connect(self._step)
         self._tmr.start(16)
 
+    def mousePressEvent(self, event):
+        if hasattr(self, 'on_clicked') and self.on_clicked:
+            self.on_clicked()
+        super().mousePressEvent(event)
+
     def _load_face(self, path: str):
         try:
             from PIL import Image, ImageDraw
@@ -294,41 +302,65 @@ class HudCanvas(QWidget):
 
     def _step(self):
         self._tick += 1
-        now = time.time()
-        if now - self._last_t > (0.12 if self.speaking else 0.5):
-            if self.speaking:
-                self._tgt_scale = random.uniform(1.06, 1.14)
-                self._tgt_halo  = random.uniform(145, 190)
-            elif self.muted:
-                self._tgt_scale = random.uniform(0.998, 1.002)
-                self._tgt_halo  = random.uniform(15, 28)
-            else:
-                self._tgt_scale = random.uniform(1.001, 1.008)
-                self._tgt_halo  = random.uniform(48, 68)
-            self._last_t = now
+        
+        # Cek apakah sedang berpikir/memproses
+        is_thinking = self.state in ("THINKING", "PROCESSING")
+        
+        # smooth vol & freq
+        vol = getattr(self, "speaking_volume", 0.0) if self.speaking else 0.0
+        freq = getattr(self, "speaking_frequency", 0.5) if self.speaking else 0.5
+        self._smooth_vol += (vol - self._smooth_vol) * 0.15
+        self._smooth_freq += (freq - self._smooth_freq) * 0.12
+        
+        if self.speaking:
+            self._tgt_scale = 1.0 + self._smooth_vol * 0.03
+            self._tgt_halo  = 40.0 + self._smooth_vol * 110.0
+        else:
+            now = time.time()
+            if now - self._last_t > 0.5:
+                if self.muted:
+                    self._tgt_scale = random.uniform(0.998, 1.002)
+                    self._tgt_halo  = random.uniform(15, 28)
+                else:
+                    self._tgt_scale = random.uniform(1.001, 1.008)
+                    self._tgt_halo  = random.uniform(48, 68)
+                self._last_t = now
 
-        sp = 0.38 if self.speaking else 0.15
+        sp = 0.45 if self.speaking else 0.15
         self._scale += (self._tgt_scale - self._scale) * sp
         self._halo  += (self._tgt_halo  - self._halo)  * sp
 
-        speeds = [1.3, -0.9, 2.0] if self.speaking else [0.55, -0.35, 0.9]
+        # Efek putar HANYA aktif saat berpikir (THINKING / PROCESSING)
+        if is_thinking:
+            speeds = [1.6, -1.1, 2.4]  # Putaran sedikit dipercepat agar indikator berpikir lebih aktif
+            scan_spd = 3.2
+            scan2_spd = -2.0
+        else:
+            speeds = [0.0, 0.0, 0.0]
+            scan_spd = 0.0
+            scan2_spd = 0.0
+
         for i, spd in enumerate(speeds):
             self._rings[i] = (self._rings[i] + spd) % 360
 
-        self._scan  = (self._scan  + (3.0 if self.speaking else 1.3)) % 360
-        self._scan2 = (self._scan2 + (-2.0 if self.speaking else -0.75)) % 360
+        self._scan  = (self._scan  + scan_spd) % 360
+        self._scan2 = (self._scan2 + scan2_spd) % 360
 
         fw  = min(self.width(), self.height())
-        lim = fw * 0.74
-        spd = 4.2 if self.speaking else 2.0
-        self._pulses = [r + spd for r in self._pulses if r + spd < lim]
-        if len(self._pulses) < 3 and random.random() < (0.07 if self.speaking else 0.025):
-            self._pulses.append(0.0)
+        lim = fw * 0.35
+        if self.state == "LISTENING" and not self.muted:
+            spd = 2.0
+            self._pulses = [r + spd for r in self._pulses if r + spd < lim]
+            if len(self._pulses) < 3 and random.random() < 0.025:
+                self._pulses.append(0.0)
+        else:
+            self._pulses = []
 
         if self.speaking and random.random() < 0.28:
             cx, cy = self.width() / 2, self.height() / 2
             ang = random.uniform(0, 2 * math.pi)
-            r_s = fw * 0.28
+            sfw = fw * 0.77 * self._scale
+            r_s = sfw * 0.28
             self._particles.append([
                 cx + math.cos(ang) * r_s, cy + math.sin(ang) * r_s,
                 math.cos(ang) * random.uniform(0.9, 2.4),
@@ -348,94 +380,118 @@ class HudCanvas(QWidget):
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.fillRect(self.rect(), qcol(C.BG))
 
         W, H = self.width(), self.height()
         cx, cy = W / 2, H / 2
         fw = min(W, H)
+        sfw = fw * 0.77 * self._scale
 
-        # grid dots
-        p.setPen(QPen(qcol(C.PRI_GHO), 1))
-        for x in range(0, W, 48):
-            for y in range(0, H, 48):
-                p.drawPoint(x, y)
+        # Dynamic theme colors based on state
+        if self.muted:
+            base_col = C.MUTED_C
+            oc = (200, 0, 50)
+        elif self.speaking:
+            base_col = C.ACC
+            oc = (200, 80, 0)
+        elif self.state in ("THINKING", "PROCESSING"):
+            base_col = C.ACC2
+            oc = (180, 140, 0)
+        elif self.state == "LISTENING":
+            base_col = C.GREEN
+            oc = (0, 180, 80)
+        else:
+            base_col = C.PRI
+            oc = (0, 60, 110)
 
-        r_face = fw * 0.31
+        r_face = sfw * 0.28
 
         # halo glow
         for i in range(10):
-            r   = r_face * (1.8 - i * 0.08)
+            r   = r_face * (1.4 - i * 0.08)
             frc = 1.0 - i / 10
             a   = max(0, min(255, int(self._halo * 0.085 * frc)))
-            col = qcol(C.MUTED_C if self.muted else C.PRI, a)
+            col = qcol(base_col, a)
             p.setPen(QPen(col, 1.5)); p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawEllipse(QRectF(cx - r, cy - r, r * 2, r * 2))
 
         # pulse rings
         for pr in self._pulses:
-            a   = max(0, int(230 * (1.0 - pr / (fw * 0.74))))
-            col = qcol(C.MUTED_C if self.muted else C.PRI, a)
+            a   = max(0, int(230 * (1.0 - pr / (fw * 0.35))))
+            col = qcol(base_col, a)
             p.setPen(QPen(col, 1.5)); p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawEllipse(QRectF(cx - pr, cy - pr, pr * 2, pr * 2))
 
         # spinning arc rings
+        vol = getattr(self, "_smooth_vol", 0.0)
+        freq = getattr(self, "_smooth_freq", 0.5)
+
         for idx, (r_frac, w_r, arc_l, gap) in enumerate(
-            [(0.48, 3, 115, 78), (0.40, 2, 78, 55), (0.32, 1, 56, 40)]
+            [(0.44, 3, 115, 78), (0.37, 2, 78, 55), (0.30, 1, 56, 40)]
         ):
-            ring_r = fw * r_frac
+            ring_r = sfw * r_frac
+            if self.speaking:
+                # Wobble the entire ring uniformly over time to show natural breathing/speaking pulses
+                wave = math.sin(self._tick * 0.06 + idx * 1.5) * (vol * sfw * 0.02)
+                ring_r += wave
             base   = self._rings[idx]
             a_val  = max(0, min(255, int(self._halo * (1.0 - idx * 0.18))))
-            col    = qcol(C.MUTED_C if self.muted else C.PRI, a_val)
+            col    = qcol(base_col, a_val)
             p.setPen(QPen(col, w_r)); p.setBrush(Qt.BrushStyle.NoBrush)
             angle = base
+            
             rect  = QRectF(cx - ring_r, cy - ring_r, ring_r * 2, ring_r * 2)
             while angle < base + 360:
                 p.drawArc(rect, int(angle * 16), int(arc_l * 16))
                 angle += arc_l + gap
 
         # scanners
-        sr = fw * 0.50
+        sr = sfw * 0.45
+        if self.speaking:
+            sr += math.sin(self._tick * 0.05) * (vol * sfw * 0.015)
+
         sa = min(255, int(self._halo * 1.5))
         ex = 75 if self.speaking else 44
-        p.setPen(QPen(qcol(C.MUTED_C if self.muted else C.PRI, sa), 2.5))
+        p.setPen(QPen(qcol(base_col, sa), 2.5))
         p.setBrush(Qt.BrushStyle.NoBrush)
         srect = QRectF(cx - sr, cy - sr, sr * 2, sr * 2)
         p.drawArc(srect, int(self._scan * 16), int(ex * 16))
-        p.setPen(QPen(qcol(C.ACC, sa // 2), 1.5))
-        p.drawArc(srect, int(self._scan2 * 16), int(ex * 16))
+        p.setPen(QPen(qcol(base_col, sa // 2), 1.5))
+        
+        sr2 = sfw * 0.45
+        if self.speaking:
+            sr2 += math.sin(self._tick * 0.05 + 3.14) * (vol * sfw * 0.015)
+        srect2 = QRectF(cx - sr2, cy - sr2, sr2 * 2, sr2 * 2)
+        p.drawArc(srect2, int(self._scan2 * 16), int(ex * 16))
 
         # tick marks
-        t_out, t_in = fw * 0.497, fw * 0.474
-        p.setPen(QPen(qcol(C.PRI, 140), 1))
+        t_out, t_in = sfw * 0.455, sfw * 0.435
+        p.setPen(QPen(qcol(base_col, 140), 1))
         for deg in range(0, 360, 10):
             rad = math.radians(deg)
             inn = t_in if deg % 30 == 0 else t_in + 6
+            t_out_cur = t_out
+            t_in_cur = inn
+            if self.speaking:
+                cycles = 3.0 + freq * 5.0
+                wave = math.sin(rad * cycles + self._tick * 0.05) * (vol * sfw * 0.015)
+                t_out_cur += wave
+                t_in_cur += wave
             p.drawLine(
-                QPointF(cx + t_out * math.cos(rad), cy - t_out * math.sin(rad)),
-                QPointF(cx + inn  * math.cos(rad), cy - inn  * math.sin(rad)),
+                QPointF(cx + t_out_cur * math.cos(rad), cy - t_out_cur * math.sin(rad)),
+                QPointF(cx + t_in_cur  * math.cos(rad), cy - t_in_cur  * math.sin(rad)),
             )
 
         # crosshair
-        ch_r, gap_h = fw * 0.51, fw * 0.16
-        p.setPen(QPen(qcol(C.PRI, int(self._halo * 0.5)), 1))
+        ch_r, gap_h = sfw * 0.46, sfw * 0.15
+        p.setPen(QPen(qcol(base_col, int(self._halo * 0.5)), 1))
         p.drawLine(QPointF(cx - ch_r, cy), QPointF(cx - gap_h, cy))
         p.drawLine(QPointF(cx + gap_h, cy), QPointF(cx + ch_r, cy))
         p.drawLine(QPointF(cx, cy - ch_r), QPointF(cx, cy - gap_h))
         p.drawLine(QPointF(cx, cy + gap_h), QPointF(cx, cy + ch_r))
 
-        # corner brackets
-        bl = 24
-        bc = qcol(C.PRI, 210)
-        hl, hr = cx - fw // 2, cx + fw // 2
-        ht, hb = cy - fw // 2, cy + fw // 2
-        p.setPen(QPen(bc, 2))
-        for bx, by, dx, dy in [(hl,ht,1,1),(hr,ht,-1,1),(hl,hb,1,-1),(hr,hb,-1,-1)]:
-            p.drawLine(QPointF(bx, by), QPointF(bx + dx * bl, by))
-            p.drawLine(QPointF(bx, by), QPointF(bx, by + dy * bl))
-
         # face
         if self._face_px:
-            fsz    = int(fw * 0.62 * self._scale)
+            fsz    = int(sfw * 0.62)
             scaled = self._face_px.scaled(
                 fsz, fsz,
                 Qt.AspectRatioMode.KeepAspectRatio,
@@ -443,16 +499,18 @@ class HudCanvas(QWidget):
             )
             p.drawPixmap(int(cx - fsz / 2), int(cy - fsz / 2), scaled)
         else:
-            orb_r = int(fw * 0.27 * self._scale)
-            oc    = (200, 0, 50) if self.muted else (0, 60, 110)
-            for i in range(8, 0, -1):
-                r2  = int(orb_r * i / 8)
-                frc = i / 8
-                a   = max(0, min(255, int(self._halo * 1.1 * frc)))
-                p.setBrush(QBrush(QColor(int(oc[0]*frc), int(oc[1]*frc), int(oc[2]*frc), a)))
-                p.setPen(Qt.PenStyle.NoPen)
-                p.drawEllipse(QRectF(cx - r2, cy - r2, r2 * 2, r2 * 2))
-            p.setPen(QPen(qcol(C.PRI, min(255, int(self._halo * 2))), 1))
+            orb_r = int(sfw * 0.27)
+            if self.speaking:
+                orb_r = int(orb_r * (1.0 + math.sin(self._tick * 0.05) * vol * 0.03))
+            grad = QRadialGradient(QPointF(cx, cy), orb_r)
+            max_a = max(0, min(130, int(self._halo * 0.6)))
+            grad.setColorAt(0.0, QColor(oc[0], oc[1], oc[2], max_a))
+            grad.setColorAt(0.5, QColor(oc[0], oc[1], oc[2], int(max_a * 0.4)))
+            grad.setColorAt(1.0, QColor(oc[0], oc[1], oc[2], 0))
+            p.setBrush(QBrush(grad))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawEllipse(QRectF(cx - orb_r, cy - orb_r, orb_r * 2, orb_r * 2))
+            p.setPen(QPen(qcol(base_col, min(255, int(self._halo * 2))), 1))
             p.setFont(QFont("Courier New", 13, QFont.Weight.Bold))
             p.drawText(QRectF(cx - 80, cy - 14, 160, 28),
                        Qt.AlignmentFlag.AlignCenter, "A.L.I.C.E")
@@ -461,57 +519,10 @@ class HudCanvas(QWidget):
         for pt in self._particles:
             a = max(0, min(255, int(pt[4] * 255)))
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(qcol(C.PRI, a)))
+            p.setBrush(QBrush(qcol(base_col, a)))
             p.drawEllipse(QPointF(pt[0], pt[1]), 2.5, 2.5)
 
-        # status text
-        sy = cy + fw * 0.40
-        if self.muted:
-            txt, col = "⊘  MUTED",     qcol(C.MUTED_C)
-        elif self.speaking:
-            txt, col = "●  SPEAKING",  qcol(C.ACC)
-        elif self.state == "THINKING":
-            sym = "◈" if self._blink else "◇"
-            txt, col = f"{sym}  THINKING",   qcol(C.ACC2)
-        elif self.state == "PROCESSING":
-            sym = "▷" if self._blink else "▶"
-            txt, col = f"{sym}  PROCESSING", qcol(C.ACC2)
-        elif self.state == "LISTENING":
-            if self.user_speaking:
-                txt, col = "🎤  USER SPEAKING", qcol(C.GREEN)
-            elif self.mic_active:
-                sym = "●" if self._blink else "○"
-                txt, col = f"{sym}  LISTENING",  qcol(C.GREEN)
-            else:
-                txt, col = "○  MIC IDLE", qcol(C.TEXT_DIM)
-        else:
-            sym = "●" if self._blink else "○"
-            txt, col = f"{sym}  {self.state}", qcol(C.PRI)
 
-        p.setPen(QPen(col, 1))
-        p.setFont(QFont("Courier New", 11, QFont.Weight.Bold))
-        p.drawText(QRectF(0, sy, W, 26), Qt.AlignmentFlag.AlignCenter, txt)
-
-        # waveform
-        wy = sy + 30
-        N, bw = 36, 8
-        wx0 = (W - N * bw) / 2
-        for i in range(N):
-            if self.muted:
-                hgt, cl = 2, qcol(C.MUTED_C)
-            elif self.speaking:
-                hgt = random.randint(3, 20)
-                cl  = qcol(C.PRI) if hgt > 12 else qcol(C.PRI_DIM)
-            elif self.state == "LISTENING" and self.user_speaking:
-                hgt = random.randint(3, 24)
-                cl  = qcol(C.GREEN) if hgt > 12 else qcol(C.BORDER_B)
-            elif self.state == "LISTENING" and self.mic_active:
-                hgt = int(3 + 1.5 * math.sin(self._tick * 0.15 + i * 0.6))
-                cl  = qcol(C.GREEN)
-            else:
-                hgt = int(3 + 2 * math.sin(self._tick * 0.09 + i * 0.6))
-                cl  = qcol(C.BORDER_B)
-            p.fillRect(QRectF(wx0 + i * bw, wy + 20 - hgt, bw - 1, hgt), cl)
 
 class MetricBar(QWidget):
 
@@ -693,7 +704,7 @@ class FileDropZone(QWidget):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(100)
+        self.setFixedHeight(45)
         self._current_file: str | None = None
         self._hovering  = False
         self._drag_over = False
@@ -797,30 +808,16 @@ class _DropCanvas(QWidget):
         else:                 self._paint_idle(p, W, H, z._hovering)
 
     def _paint_idle(self, p, W, H, hover):
-        cx, cy = W / 2, H / 2
         col = qcol(C.PRI_DIM if not hover else C.PRI)
-        p.setPen(QPen(col, 2)); p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawLine(QPointF(cx, cy - 14), QPointF(cx, cy + 4))
-        p.drawLine(QPointF(cx - 8, cy - 6), QPointF(cx, cy - 14))
-        p.drawLine(QPointF(cx + 8, cy - 6), QPointF(cx, cy - 14))
-        p.drawLine(QPointF(cx - 14, cy + 4), QPointF(cx + 14, cy + 4))
-        p.setFont(QFont("Courier New", 8))
-        p.setPen(QPen(qcol(C.PRI_DIM if not hover else C.TEXT), 1))
-        p.drawText(QRectF(0, cy + 8, W, 16), Qt.AlignmentFlag.AlignCenter,
-                   "Drop file here  or  Click to Browse")
-        p.setFont(QFont("Courier New", 7))
-        p.setPen(QPen(qcol("#1a4a5a"), 1))
-        p.drawText(QRectF(0, cy + 24, W, 14), Qt.AlignmentFlag.AlignCenter,
-                   "Images · Video · Audio · PDF · Docs · Code · Data")
+        p.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        p.setPen(QPen(col, 1))
+        p.drawText(QRectF(0, 0, W, H), Qt.AlignmentFlag.AlignCenter,
+                   "📂 Drop file  or  Click to Browse")
 
     def _paint_drag_over(self, p, W, H):
-        cx, cy = W / 2, H / 2
-        p.setFont(QFont("Courier New", 20))
-        p.setPen(QPen(qcol(C.PRI), 1))
-        p.drawText(QRectF(0, cy - 24, W, 32), Qt.AlignmentFlag.AlignCenter, "⬇")
         p.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
         p.setPen(QPen(qcol(C.PRI), 1))
-        p.drawText(QRectF(0, cy + 12, W, 16), Qt.AlignmentFlag.AlignCenter, "Release to load")
+        p.drawText(QRectF(0, 0, W, H), Qt.AlignmentFlag.AlignCenter, "⬇ Release to load file")
 
     def _paint_file(self, p, W, H):
         path = Path(self._z._current_file)
@@ -829,32 +826,25 @@ class _DropCanvas(QWidget):
         size_str = _fmt_size(path.stat().st_size)
         ext_str  = path.suffix.upper().lstrip(".") or "FILE"
 
-        block_x, block_w = 10, 60
-        p.setFont(QFont("Segoe UI Emoji", 22) if _OS == "Windows" else QFont("Arial", 22))
+        block_x, block_w = 10, 30
+        p.setFont(QFont("Segoe UI Emoji", 14) if _OS == "Windows" else QFont("Arial", 14))
         p.setPen(QPen(qcol(icon_col), 1))
         p.drawText(QRectF(block_x, 0, block_w, H), Qt.AlignmentFlag.AlignCenter, icon)
 
-        tx = block_x + block_w + 6
+        tx = block_x + block_w + 4
         tw = W - tx - 38
 
         p.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
         p.setPen(QPen(qcol(C.WHITE), 1))
-        name = path.name if len(path.name) <= 34 else path.name[:31] + "..."
-        p.drawText(QRectF(tx, H * 0.18, tw, 16),
+        name = path.name if len(path.name) <= 30 else path.name[:27] + "..."
+        p.drawText(QRectF(tx, H * 0.15, tw, 15),
                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
 
         p.setFont(QFont("Courier New", 7))
         p.setPen(QPen(qcol(C.TEXT_DIM), 1))
-        p.drawText(QRectF(tx, H * 0.18 + 18, tw, 14),
+        p.drawText(QRectF(tx, H * 0.15 + 15, tw, 13),
                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                    f"{ext_str}  ·  {size_str}")
-
-        p.setFont(QFont("Courier New", 6))
-        p.setPen(QPen(qcol("#1e5c6a"), 1))
-        par = str(path.parent)
-        if len(par) > 42: par = "…" + par[-41:]
-        p.drawText(QRectF(tx, H * 0.18 + 34, tw, 12),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, par)
 
         p.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
         p.setPen(QPen(qcol(C.RED, 180), 1))
@@ -1225,12 +1215,84 @@ class RemoteKeyOverlay(QWidget):
         self.closed.emit()
 
 
+class HudWindow(QWidget):
+    def __init__(self, face_path: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("A.L.I.C.E — HUD Overlay")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.WindowTransparentForInput |
+            Qt.WindowType.Tool
+        )
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self.hud = HudCanvas(face_path, self)
+        self.hud.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        lay.addWidget(self.hud)
+
+        # Center on primary screen
+        screen = QApplication.primaryScreen().availableGeometry()
+        w, h = 360, 360
+        x = screen.x() + (screen.width() - w) // 2
+        y = screen.y() + (screen.height() - h) // 2
+        self.setGeometry(x, y, w, h)
+
+        self._first_greeting_done = False
+        self._has_spoken_once = False
+        self._target_opacity = 1.0
+        self._current_opacity = 1.0
+        self.setWindowOpacity(self._current_opacity)
+
+        self._fade_timer = QTimer(self)
+        self._fade_timer.timeout.connect(self._fade_step)
+        self._fade_timer.start(16)
+
+    def update_opacity(self):
+        if not hasattr(self, "_first_greeting_done"):
+            self._first_greeting_done = False
+            self._has_spoken_once = False
+
+        if not self._first_greeting_done:
+            if self.hud.state == "SPEAKING" or self.hud.speaking:
+                self._has_spoken_once = True
+                self._target_opacity = 1.0
+                return
+            elif self._has_spoken_once and self.hud.state not in ("INITIALISING", "SPEAKING") and not self.hud.speaking:
+                self._first_greeting_done = True
+            else:
+                self._target_opacity = 1.0
+                return
+
+        is_active = (
+            self.hud.speaking or
+            self.hud.user_speaking or
+            self.hud.mic_active or
+            self.hud.state in ("SPEAKING", "LISTENING")
+        )
+        if is_active:
+            self._target_opacity = 0.4
+        else:
+            self._target_opacity = 0.04
+
+    def _fade_step(self):
+        self.update_opacity()
+
+        if abs(self._current_opacity - self._target_opacity) > 0.01:
+            diff = self._target_opacity - self._current_opacity
+            self._current_opacity += diff * 0.1
+            self.setWindowOpacity(self._current_opacity)
+
+
 class MainWindow(QMainWindow):
     _log_sig     = pyqtSignal(str)
     _state_sig   = pyqtSignal(str)
     _content_sig = pyqtSignal(str, str)   # (title, text) — thread-safe content display
     _user_speak_sig = pyqtSignal(bool)
     _mic_active_sig = pyqtSignal(bool)
+    _speak_data_sig = pyqtSignal(float, float)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -1238,24 +1300,42 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(_MIN_W, _MIN_H)
         self.resize(_DEFAULT_W, _DEFAULT_H)
 
-        screen = QApplication.primaryScreen().availableGeometry()
-        self.move(
-            (screen.width()  - _DEFAULT_W) // 2,
-            (screen.height() - _DEFAULT_H) // 2,
+        # Frameless, translucent, stays on top, taskbar hidden
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
         )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        screen = QApplication.primaryScreen().availableGeometry()
+        margin = 16
+        x = screen.x() + screen.width() - _DEFAULT_W - margin
+        y = screen.y() + screen.height() - _DEFAULT_H - margin
+        self.move(x, y)
 
         self.on_text_command  = None
         self.on_remote_clicked = None   # callable: () -> (url, key) | None
+        self.on_escape_pressed = None
         self._muted           = False
+        self._voice_interrupt = False
+        self._is_hidden       = True
         self._current_file: str | None = None
         self._remote_overlay: RemoteKeyOverlay | None = None
 
         central = QWidget()
-        central.setStyleSheet(f"background: {C.BG};")
+        central.setObjectName("centralWidget")
+        central.setStyleSheet(
+            f"#centralWidget {{"
+            f"  background: rgba(0, 6, 10, 220);"
+            f"  border: 2px solid {C.BORDER};"
+            f"  border-radius: 16px;"
+            f"}}"
+        )
         self.setCentralWidget(central)
 
         root = QVBoxLayout(central)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(2, 2, 2, 2)
         root.setSpacing(0)
         root.addWidget(self._build_header())
 
@@ -1266,18 +1346,20 @@ class MainWindow(QMainWindow):
         self._left_panel = self._build_left_panel()
         body.addWidget(self._left_panel, stretch=0)
 
-        # Center column: HUD on top + content panel below
-        _center = QWidget()
-        _center.setStyleSheet(f"background: {C.BG};")
-        _center_lay = QVBoxLayout(_center)
+        # Center column: content panel only (collapsible)
+        self._center_widget = QWidget()
+        self._center_widget.setStyleSheet("background: transparent;")
+        _center_lay = QVBoxLayout(self._center_widget)
         _center_lay.setContentsMargins(0, 0, 0, 0)
         _center_lay.setSpacing(0)
-        self.hud = HudCanvas(face_path)
-        self.hud.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        _center_lay.addWidget(self.hud, stretch=1)
+        
         self._content_panel = self._build_content_panel()
         _center_lay.addWidget(self._content_panel)
-        body.addWidget(_center, stretch=5)
+        body.addWidget(self._center_widget, stretch=5)
+
+        # Separate HUD Window in the center of the screen
+        self.hud_win = HudWindow(face_path)
+        self.hud = self.hud_win.hud
 
         self._right_panel = self._build_right_panel()
         body.addWidget(self._right_panel, stretch=0)
@@ -1301,6 +1383,9 @@ class MainWindow(QMainWindow):
         self._content_sig.connect(self._show_content)
         self._user_speak_sig.connect(self._apply_user_speaking)
         self._mic_active_sig.connect(self._apply_mic_active)
+        self._speak_data_sig.connect(self._apply_speaking_data)
+
+        self._adjust_window_geometry()
 
         self._overlay: SetupOverlay | None = None
         self._ready = self._check_config()
@@ -1309,14 +1394,220 @@ class MainWindow(QMainWindow):
 
         sc_mute = QShortcut(QKeySequence("F4"), self)
         sc_mute.activated.connect(self._toggle_mute)
-        sc_full = QShortcut(QKeySequence("F11"), self)
-        sc_full.activated.connect(self._toggle_fullscreen)
 
-    def _toggle_fullscreen(self):
-        if self.isFullScreen():
-            self.showNormal()
+        # Dragging position init
+        self._drag_pos = None
+
+        # Setup QSystemTrayIcon and Global Hotkey
+        self._setup_tray_icon()
+        QTimer.singleShot(100, self._register_global_hotkey)
+
+    def _setup_tray_icon(self):
+        self.tray_icon = QSystemTrayIcon(self)
+        
+        # Use simple colored pixmap as icon
+        pixmap = QPixmap(32, 32)
+        pixmap.fill(QColor("#00d4ff"))
+        self.tray_icon.setIcon(QIcon(pixmap))
+        
+        tray_menu = QMenu()
+        
+        self.tray_mute_action = tray_menu.addAction("🎙 Microphone: ACTIVE")
+        self.tray_mute_action.triggered.connect(self._toggle_mute)
+        
+        self.tray_interrupt_action = tray_menu.addAction("🛑 Interrupt: MANUAL")
+        self.tray_interrupt_action.triggered.connect(self._toggle_interrupt_mode)
+        
+        self.tray_remote_action = tray_menu.addAction("◉ Remote Control")
+        self.tray_remote_action.triggered.connect(self._open_remote)
+        
+        tray_menu.addSeparator()
+        
+        show_action = tray_menu.addAction("Show/Hide Panel")
+        show_action.triggered.connect(self._toggle_visibility)
+        
+        exit_action = tray_menu.addAction("Exit")
+        exit_action.triggered.connect(self.close)
+        
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self._tray_icon_activated)
+        self.tray_icon.show()
+        
+        self._update_tray_menu()
+
+    def _update_tray_menu(self):
+        if hasattr(self, 'tray_mute_action'):
+            if self._muted:
+                self.tray_mute_action.setText("🔇 Microphone: MUTED (Unmute)")
+            else:
+                self.tray_mute_action.setText("🎙 Microphone: ACTIVE (Mute)")
+                
+        if hasattr(self, 'tray_interrupt_action'):
+            if self._voice_interrupt:
+                self.tray_interrupt_action.setText("🎙 Interrupt: VOICE VAD (Manual)")
+            else:
+                self.tray_interrupt_action.setText("🛑 Interrupt: MANUAL (Voice VAD)")
+
+    def _toggle_visibility(self):
+        screen = QApplication.primaryScreen().availableGeometry()
+        margin = 16
+        if self._content_panel.isVisible():
+            w = _DEFAULT_W # 980
+            h = _DEFAULT_H # 700
         else:
-            self.showFullScreen()
+            w = _LEFT_W + _RIGHT_W + 4 # 492
+            h = 450
+        
+        x_target = screen.x() + screen.width() - w - margin
+        y_target = screen.y() + screen.height() - h - margin
+        x_offscreen = screen.x() + screen.width()
+
+        if not hasattr(self, "_slide_anim"):
+            self._slide_anim = QPropertyAnimation(self, b"geometry")
+            self._slide_anim.setDuration(350)
+            self._slide_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        self._slide_anim.stop()
+
+        if not self._is_hidden:
+            self._is_hidden = True
+            self._slide_anim.setStartValue(QRect(self.x(), self.y(), self.width(), self.height()))
+            self._slide_anim.setEndValue(QRect(x_offscreen, y_target, w, h))
+            try:
+                self._slide_anim.finished.disconnect()
+            except Exception:
+                pass
+            self._slide_anim.finished.connect(self.hide)
+            self._slide_anim.start()
+        else:
+            self._is_hidden = False
+            self.setGeometry(x_offscreen, y_target, w, h)
+            self.showNormal()
+            self.activateWindow()
+            self.raise_()
+
+            self._slide_anim.setStartValue(QRect(x_offscreen, y_target, w, h))
+            self._slide_anim.setEndValue(QRect(x_target, y_target, w, h))
+            try:
+                self._slide_anim.finished.disconnect()
+            except Exception:
+                pass
+            self._slide_anim.start()
+
+            if hasattr(self, 'on_wake_requested') and self.on_wake_requested:
+                try:
+                    self.on_wake_requested()
+                except Exception:
+                    pass
+
+    def _tray_icon_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self._toggle_visibility()
+
+    def _register_global_hotkey(self):
+        if platform.system() == "Windows":
+            try:
+                import ctypes
+                hwnd = int(self.winId())
+                MOD_ALT = 0x0001
+                VK_SPACE = 0x20
+                VK_SCROLL = 0x91
+                success = ctypes.windll.user32.RegisterHotKey(hwnd, 47, MOD_ALT, VK_SPACE)
+                if success:
+                    print("[UI] Global hotkey Alt+Space registered successfully.")
+                else:
+                    print("[UI] ⚠️ Failed to register global hotkey Alt+Space.")
+                
+                success_scroll = ctypes.windll.user32.RegisterHotKey(hwnd, 48, MOD_ALT, VK_SCROLL)
+                if success_scroll:
+                    print("[UI] Global hotkey Alt+Scroll Lock registered successfully.")
+                else:
+                    print("[UI] ⚠️ Failed to register global hotkey Alt+Scroll Lock.")
+            except Exception as e:
+                print(f"[UI] ⚠️ Error registering global hotkeys: {e}")
+
+    def nativeEvent(self, eventType, message):
+        try:
+            et_bytes = bytes(eventType) if hasattr(eventType, "__bytes__") else eventType
+            if (et_bytes == b"windows_generic_MSG" or et_bytes == "windows_generic_MSG") and message:
+                addr = int(message)
+                if addr != 0:
+                    import ctypes
+                    from ctypes import wintypes
+                    msg = wintypes.MSG.from_address(addr)
+                    if msg.message == 0x0312:  # WM_HOTKEY
+                        if msg.wParam == 47:
+                            self._toggle_visibility()
+                            return True, 0
+                        elif msg.wParam == 48:
+                            self._toggle_mute()
+                            return True, 0
+        except Exception as e:
+            pass
+        return False, 0
+
+    def closeEvent(self, event):
+        if hasattr(self, "hud_win") and self.hud_win:
+            try:
+                self.hud_win.close()
+            except Exception:
+                pass
+        if platform.system() == "Windows":
+            try:
+                import ctypes
+                hwnd = int(self.winId())
+                ctypes.windll.user32.UnregisterHotKey(hwnd, 47)
+                ctypes.windll.user32.UnregisterHotKey(hwnd, 48)
+                print("[UI] Global hotkeys unregistered.")
+            except Exception:
+                pass
+        super().closeEvent(event)
+
+    def setVisible(self, visible):
+        super().setVisible(visible)
+        if hasattr(self, "hud_win") and self.hud_win:
+            try:
+                self.hud_win.setVisible(True)
+                self.hud_win.raise_()
+            except Exception:
+                pass
+
+    def show(self):
+        if self._is_hidden:
+            super().hide()
+        else:
+            super().show()
+
+    def _adjust_window_geometry(self):
+        screen = QApplication.primaryScreen().availableGeometry()
+        margin = 16
+        if self._content_panel.isVisible():
+            self._center_widget.show()
+            w = _DEFAULT_W # 980
+            h = _DEFAULT_H # 700
+            self.setMinimumSize(_MIN_W, _MIN_H)
+        else:
+            self._center_widget.hide()
+            w = _LEFT_W + _RIGHT_W + 4 # 492
+            h = 450
+            self.setMinimumSize(w, h)
+        x = screen.x() + screen.width() - w - margin
+        y = screen.y() + screen.height() - h - margin
+        
+        if not self._is_hidden:
+            self.setGeometry(x, y, w, h)
+        else:
+            self.setGeometry(screen.x() + screen.width(), y, w, h)
+
+    def _hide_content_and_adjust(self):
+        self._content_panel.hide()
+        self._adjust_window_geometry()
+
+    def mousePressEvent(self, event):
+        pass
+
+    def mouseMoveEvent(self, event):
+        pass
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1390,7 +1681,7 @@ class MainWindow(QMainWindow):
     def _build_header(self) -> QWidget:
         w = QWidget()
         w.setFixedHeight(54)
-        w.setStyleSheet(f"background: {C.DARK}; border-bottom: 1px solid {C.BORDER_B};")
+        w.setStyleSheet(f"background: rgba(0, 13, 20, 220); border-bottom: 1px solid {C.BORDER_B}; border-top-left-radius: 16px; border-top-right-radius: 16px;")
         lay = QHBoxLayout(w)
         lay.setContentsMargins(16, 0, 16, 0)
 
@@ -1438,7 +1729,7 @@ class MainWindow(QMainWindow):
     def _build_left_panel(self) -> QWidget:
         w = QWidget()
         w.setFixedWidth(_LEFT_W)
-        w.setStyleSheet(f"background: {C.DARK}; border-right: 1px solid {C.BORDER};")
+        w.setStyleSheet(f"background: rgba(0, 13, 20, 220); border-right: 1px solid {C.BORDER};")
         lay = QVBoxLayout(w)
         lay.setContentsMargins(8, 10, 8, 10)
         lay.setSpacing(6)
@@ -1489,25 +1780,11 @@ class MainWindow(QMainWindow):
         lay.addWidget(info_panel)
         lay.addStretch()
 
-        for txt, col in [
-            ("AI CORE\nACTIVE",     C.GREEN),
-            ("SEC\nCLEARED",        C.PRI),
-            ("PROTOCOL\nXXXVIII",   C.TEXT_DIM),
-        ]:
-            lbl = QLabel(txt)
-            lbl.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet(
-                f"color: {col}; background: {C.PANEL2};"
-                f"border: 1px solid {C.BORDER_A}; border-radius: 3px; padding: 4px;"
-            )
-            lay.addWidget(lbl)
-
         return w
     def _build_right_panel(self) -> QWidget:
         w = QWidget()
         w.setFixedWidth(_RIGHT_W)
-        w.setStyleSheet(f"background: {C.DARK}; border-left: 1px solid {C.BORDER};")
+        w.setStyleSheet(f"background: rgba(0, 13, 20, 220); border-left: 1px solid {C.BORDER};")
         lay = QVBoxLayout(w)
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(6)
@@ -1544,50 +1821,20 @@ class MainWindow(QMainWindow):
         lay.addWidget(_sec("COMMAND INPUT"))
         lay.addLayout(self._build_input_row())
 
-        self._mute_btn = QPushButton("🎙  MICROPHONE ACTIVE")
-        self._mute_btn.setFixedHeight(30)
-        self._mute_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
-        self._mute_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._mute_btn.clicked.connect(self._toggle_mute)
-        self._style_mute_btn()
-        lay.addWidget(self._mute_btn)
-
-        remote_btn = QPushButton("◉  REMOTE CONTROL")
-        remote_btn.setFixedHeight(30)
-        remote_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
-        remote_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        remote_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: #00091a; color: {C.PRI};
-                border: 1px solid {C.PRI_DIM}; border-radius: 3px;
-            }}
-            QPushButton:hover {{
-                background: {C.PRI_GHO}; border: 1px solid {C.PRI};
-            }}
-        """)
-        remote_btn.clicked.connect(self._open_remote)
-        lay.addWidget(remote_btn)
-
-        fs_btn = QPushButton("⛶  FULLSCREEN  [F11]")
-        fs_btn.setFixedHeight(26)
-        fs_btn.setFont(QFont("Courier New", 7))
-        fs_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        fs_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; color: {C.TEXT_MED};
-                border: 1px solid {C.BORDER}; border-radius: 3px;
-            }}
-            QPushButton:hover {{
-                color: {C.PRI}; border: 1px solid {C.BORDER_B};
-            }}
-        """)
-        fs_btn.clicked.connect(self._toggle_fullscreen)
-        lay.addWidget(fs_btn)
-
         return w
 
     def _build_input_row(self) -> QHBoxLayout:
         row = QHBoxLayout(); row.setSpacing(5)
+
+        # Microphone toggle button
+        self._mic_btn = QPushButton("🎙")
+        self._mic_btn.setFixedSize(30, 30)
+        self._mic_btn.setFont(QFont("Courier New", 12))
+        self._mic_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._mic_btn.clicked.connect(self._toggle_mute)
+        row.addWidget(self._mic_btn)
+        self._update_mic_btn_style()
+
         self._input = QLineEdit()
         self._input.setPlaceholderText("Type a command or question…")
         self._input.setFont(QFont("Courier New", 9))
@@ -1668,7 +1915,7 @@ class MainWindow(QMainWindow):
             }}
             QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
         """)
-        dismiss.clicked.connect(w.hide)
+        dismiss.clicked.connect(self._hide_content_and_adjust)
         hdr.addWidget(dismiss)
         lay.addLayout(hdr)
 
@@ -1717,11 +1964,12 @@ class MainWindow(QMainWindow):
             self._content_display.textCursor().MoveOperation.Start
         )
         self._content_panel.show()
+        self._adjust_window_geometry()
 
     def _build_footer(self) -> QWidget:
         w = QWidget()
         w.setFixedHeight(22)
-        w.setStyleSheet(f"background: {C.DARK}; border-top: 1px solid {C.BORDER};")
+        w.setStyleSheet(f"background: rgba(0, 13, 20, 220); border-top: 1px solid {C.BORDER}; border-bottom-left-radius: 16px; border-bottom-right-radius: 16px;")
         lay = QHBoxLayout(w); lay.setContentsMargins(14, 0, 14, 0)
 
         def _fl(txt, color=C.TEXT_MED):
@@ -1789,32 +2037,69 @@ class MainWindow(QMainWindow):
     def _toggle_mute(self):
         self._muted = not self._muted
         self.hud.muted = self._muted
-        self._style_mute_btn()
+        self._update_tray_menu()
+        self._update_mic_btn_style()
         if self._muted:
             self._apply_state("MUTED")
             self._log.append_log("SYS: Microphone muted.")
         else:
             self._apply_state("LISTENING")
             self._log.append_log("SYS: Microphone active.")
+            if hasattr(self, 'on_wake_requested') and self.on_wake_requested:
+                try:
+                    self.on_wake_requested()
+                except Exception:
+                    pass
+
+    def _update_mic_btn_style(self):
+        if not hasattr(self, "_mic_btn"):
+            return
+        if self._muted:
+            self._mic_btn.setText("🔇")
+            self._mic_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #1a0505; color: #ff6666;
+                    border: 1px solid #993333; border-radius: 3px;
+                }}
+                QPushButton:hover {{ background: #330a0a; border: 1px solid #ff4444; }}
+            """)
+            self._mic_btn.setToolTip("Microphone: MUTED (Click to Active)")
+        else:
+            self._mic_btn.setText("🎙")
+            self._mic_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #001a14; color: #00d4ff;
+                    border: 1px solid #005f73; border-radius: 3px;
+                }}
+                QPushButton:hover {{ background: #00332c; border: 1px solid #00d4ff; }}
+            """)
+            self._mic_btn.setToolTip("Microphone: ACTIVE (Click to Mute)")
 
     def _style_mute_btn(self):
-        if self._muted:
-            self._mute_btn.setText("🔇  MICROPHONE MUTED")
-            self._mute_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: #140006; color: {C.MUTED_C};
-                    border: 1px solid {C.MUTED_C}; border-radius: 3px;
-                }}
-            """)
+        pass
+
+    def _toggle_interrupt_mode(self):
+        self._voice_interrupt = not self._voice_interrupt
+        self._update_tray_menu()
+        if self._voice_interrupt:
+            self._log.append_log("SYS: Interrupt mode set to VOICE (VAD).")
         else:
-            self._mute_btn.setText("🎙  MICROPHONE ACTIVE")
-            self._mute_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: #00140a; color: {C.GREEN};
-                    border: 1px solid {C.GREEN}; border-radius: 3px;
-                }}
-                QPushButton:hover {{ background: #001f10; }}
-            """)
+            self._log.append_log("SYS: Interrupt mode set to MANUAL (Esc/Click/Cmd).")
+
+    def _style_interrupt_btn(self):
+        pass
+
+    def _on_hud_clicked(self):
+        if hasattr(self, 'on_escape_pressed') and self.on_escape_pressed:
+            self.on_escape_pressed()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            if hasattr(self, 'on_escape_pressed') and self.on_escape_pressed:
+                self.on_escape_pressed()
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def _send(self):
         txt = self._input.text().strip()
@@ -1827,14 +2112,25 @@ class MainWindow(QMainWindow):
     def _apply_state(self, state: str):
         self.hud.state    = state
         self.hud.speaking = (state == "SPEAKING")
+        if hasattr(self, "hud_win") and self.hud_win:
+            self.hud_win.update_opacity()
+
+    def _apply_speaking_data(self, vol: float, freq: float):
+        self.hud.speaking_volume = vol
+        self.hud.speaking_frequency = freq
+        self.hud.update()
 
     def _apply_user_speaking(self, active: bool):
         self.hud.user_speaking = active
         self.hud.update()
+        if hasattr(self, "hud_win") and self.hud_win:
+            self.hud_win.update_opacity()
 
     def _apply_mic_active(self, active: bool):
         self.hud.mic_active = active
         self.hud.update()
+        if hasattr(self, "hud_win") and self.hud_win:
+            self.hud_win.update_opacity()
 
     def _check_config(self) -> bool:
         if not API_FILE.exists(): return False
@@ -1897,6 +2193,10 @@ class JarvisUI:
             self._win._toggle_mute()
 
     @property
+    def voice_interrupt_enabled(self) -> bool:
+        return self._win._voice_interrupt
+
+    @property
     def current_file(self) -> str | None:
         return self._win._drop_zone.current_file()
 
@@ -1917,27 +2217,56 @@ class JarvisUI:
         self._win.on_remote_clicked = cb
 
     def notify_phone_connected(self) -> None:
-        self._win.notify_phone_connected()
+        try:
+            self._win.notify_phone_connected()
+        except RuntimeError:
+            pass
 
     def set_state(self, state: str):
-        self._win._state_sig.emit(state)
+        try:
+            self._win._state_sig.emit(state)
+        except RuntimeError:
+            pass
 
     def write_log(self, text: str):
-        self._win._log_sig.emit(text)
+        try:
+            self._win._log_sig.emit(text)
+        except RuntimeError:
+            pass
 
     def wait_for_api_key(self):
-        while not self._win._ready:
+        while True:
+            try:
+                if self._win._ready:
+                    break
+            except RuntimeError:
+                break
             time.sleep(0.1)
 
     def set_user_speaking(self, active: bool):
-        self._win._user_speak_sig.emit(active)
+        try:
+            self._win._user_speak_sig.emit(active)
+        except RuntimeError:
+            pass
 
     def set_mic_active(self, active: bool):
-        self._win._mic_active_sig.emit(active)
+        try:
+            self._win._mic_active_sig.emit(active)
+        except RuntimeError:
+            pass
+
+    def set_speaking_volume(self, vol: float, freq: float = 0.5):
+        try:
+            self._win._speak_data_sig.emit(vol, freq)
+        except RuntimeError:
+            pass
 
     def show_content(self, title: str, text: str):
         """Thread-safe: display content in the panel below the HUD."""
-        self._win._content_sig.emit(title[:48], text[:4000])
+        try:
+            self._win._content_sig.emit(title[:48], text[:4000])
+        except RuntimeError:
+            pass
 
     def start_speaking(self):
         self.set_state("SPEAKING")
