@@ -348,6 +348,25 @@ def _detect_default_browser() -> str:
     return "chrome"
 
 
+def _get_browseros_cdp_port() -> int:
+    default_port = 9100 if platform.system() == "Windows" else 9102
+    try:
+        import json
+        if platform.system() == "Windows":
+            user_profile = os.environ.get("USERPROFILE", "")
+            config_path = Path(user_profile) / ".config" / "browser-os" / ".browseros" / "server_config.json"
+        else:
+            config_path = Path.home() / ".config" / "browser-os" / ".browseros" / "server_config.json"
+            
+        if config_path.exists():
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("ports", {}).get("cdp", default_port)
+    except Exception as e:
+        print(f"[BrowserOS] Error reading config file: {e}")
+    return default_port
+
+
 def _is_browseros_running() -> bool:
     try:
         import urllib.request
@@ -493,9 +512,10 @@ class _BrowserSession:
                         print("[Browser] ⚠️ No local browser found. Raising error.")
 
             if self.browser_name == "browseros":
-                print("[Browser] Connecting to BrowserOS via CDP on port 9100...")
+                cdp_port = _get_browseros_cdp_port()
+                print(f"[Browser] Connecting to BrowserOS via CDP on port {cdp_port}...")
                 try:
-                    browser = await self._pw.chromium.connect_over_cdp("http://127.0.0.1:9100")
+                    browser = await self._pw.chromium.connect_over_cdp(f"http://127.0.0.1:{cdp_port}")
                     self._browser = browser
                     self._context = browser.contexts[0] if browser.contexts else await browser.new_context()
                     pages = self._context.pages
