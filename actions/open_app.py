@@ -78,6 +78,40 @@ def _normalize(raw: str) -> str:
     return raw  
 
 def find_and_focus_window(app_name: str) -> bool:
+    if _SYSTEM == "Linux":
+        try:
+            if not shutil.which("wmctrl"):
+                return False
+            res = subprocess.run(["wmctrl", "-l"], capture_output=True, text=True, timeout=3)
+            if res.returncode != 0:
+                return False
+            app_name_lower = app_name.lower().strip()
+            keyword_map = {
+                "code": "visual studio code",
+                "vscode": "visual studio code",
+                "chrome": "chrome",
+                "google-chrome": "chrome",
+                "chromium-browser": "chromium",
+                "firefox": "firefox",
+                "spotify": "spotify",
+                "terminal": "terminal",
+                "whatsapp": "whatsapp",
+                "telegram": "telegram",
+                "discord": "discord",
+            }
+            search_keyword = keyword_map.get(app_name_lower, app_name_lower)
+            for line in res.stdout.splitlines():
+                parts = line.split(None, 3)
+                if len(parts) >= 4:
+                    window_title = parts[3].lower()
+                    if search_keyword in window_title:
+                        window_id = parts[0]
+                        subprocess.run(["wmctrl", "-i", "-a", window_id])
+                        return True
+        except Exception as e:
+            print(f"[open_app] Linux focus window check failed: {e}")
+        return False
+
     if _SYSTEM != "Windows":
         return False
     try:
@@ -148,95 +182,50 @@ def find_and_focus_window(app_name: str) -> bool:
             style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
             ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
             
-            # Filter out tool windows
-            if ex_style & win32con.WS_EX_TOOLWINDOW:
-                return True
-            # Filter out children windows
-            if style & win32con.WS_CHILD:
-                return True
-            # Check for owner window
-            owner = win32gui.GetWindow(hwnd, win32con.GW_OWNER)
-            if owner and win32gui.IsWindowVisible(owner):
+            # Filter criteria: must not be tool windows, must be main windows
+            is_tool = (ex_style & win32con.WS_EX_TOOLWINDOW) != 0
+            is_app = (ex_style & win32con.WS_EX_APPWINDOW) != 0
+            has_parent = win32gui.GetParent(hwnd) != 0
+            
+            # Exclude overlays / HUD windows (like A.L.I.C.E itself)
+            if "a.l.i.c.e" in title.lower() or "hud overlay" in title.lower():
                 return True
                 
-            # Get process name
-            try:
-                _, pid = win32process.GetWindowThreadProcessId(hwnd)
-                proc = psutil.Process(pid)
-                proc_name = proc.name().lower()
-            except Exception:
-                proc_name = ""
-
-            hwnds.append((hwnd, title, proc_name))
+            if not is_tool and (not has_parent or is_app):
+                # Search keyword case-insensitive match on window title
+                if search_keyword in title.lower():
+                    hwnds.append(hwnd)
         return True
-
+        
     try:
         win32gui.EnumWindows(enum_windows_callback, None)
-    except Exception:
+    except Exception as e:
+        print(f"[open_app] EnumWindows failed: {e}")
         return False
-
-    # Find matching window
-    matched_hwnd = None
-    matched_title = None
-    for hwnd, title, proc_name in hwnds:
-        title_lower = title.lower()
-        # Avoid matching ALICE itself
-        if "mark-xlvii" in title_lower or "alice" in title_lower:
-            continue
-            
-        # Match by search_keyword in title or process name
-        if search_keyword in title_lower or search_keyword in proc_name:
-            matched_hwnd = hwnd
-            matched_title = title
-            break
-
-    if matched_hwnd:
-        hwnd = matched_hwnd
-        print(f"[open_app] Found existing window: '{matched_title}' (HWND: {hwnd}). Focusing...")
         
-        # 1. Restore if minimized (iconic) or if it is a UWP window
-        try:
-            class_name = win32gui.GetClassName(hwnd)
-            if win32gui.IsIconic(hwnd) or class_name == "ApplicationFrameWindow":
-                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-            else:
-                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
-        except Exception:
-            pass
-
-        # 2. SwitchToThisWindow API (Incredibly robust for Alt-Tab simulation)
-        try:
-            ctypes.windll.user32.SwitchToThisWindow(hwnd, True)
-            time.sleep(0.05)
-        except Exception:
-            pass
-
-        # 3. SetForegroundWindow
-        success = False
-        try:
-            if win32gui.SetForegroundWindow(hwnd):
-                win32gui.SetFocus(hwnd)
-                success = True
-        except Exception:
-            pass
-
-        # 5. Alt key bypass + SetForegroundWindow
-        if not success:
+    if not hwnds:
+        return False
+        
+    # Get the first matching window and switch to it
+    hwnd = hwnds[0]
+    
+    try:
+        # 1. Restore if minimized
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            time.sleep(0.1)
+            
+        # 2. Try standard BringToForeground/SetForegroundWindow
+        win32gui.SetForegroundWindow(hwnd)
+        
+        # 3. Force foreground using Win32 API attach thread input trick
+        # This is needed on Windows 10/11 because of foreground locking policy
+        fore_hwnd = win32gui.GetForegroundWindow()
+        if fore_hwnd != hwnd:
             try:
-                ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
-                if win32gui.SetForegroundWindow(hwnd):
-                    win32gui.SetFocus(hwnd)
-                    success = True
-                ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)
-            except Exception:
-                pass
-
-        # 6. AttachThreadInput trick
-        if not success:
-            try:
-                fore_window = win32gui.GetForegroundWindow()
-                fore_thread = win32process.GetWindowThreadProcessId(fore_window)[0]
-                app_thread = win32api.GetCurrentThreadId()
+                fore_thread = win32process.GetWindowThreadProcessId(fore_hwnd)[0]
+                app_thread = win32process.GetWindowThreadProcessId(hwnd)[0]
+                
                 if fore_thread != app_thread:
                     win32process.AttachThreadInput(fore_thread, app_thread, True)
                     if win32gui.SetForegroundWindow(hwnd):
@@ -255,6 +244,9 @@ def find_and_focus_window(app_name: str) -> bool:
             
         return True
             
+    except Exception:
+        pass
+        
     return False
 
 def _launch_windows(app_name: str) -> bool:
@@ -349,6 +341,12 @@ def _launch_macos(app_name: str) -> bool:
 
 
 def _launch_linux(app_name: str) -> bool:
+    name_lower = app_name.lower().strip()
+    if name_lower in ["chrome", "google-chrome", "google-chrome-stable", "browser", "browseros", "chromium", "chromium-browser"]:
+        for alt in ["chromium-browser", "google-chrome", "google-chrome-stable", "chromium", "firefox", "brave", "brave-browser"]:
+            if shutil.which(alt):
+                app_name = alt
+                break
 
     binary = (
         shutil.which(app_name) or
@@ -444,7 +442,7 @@ def open_app(
     if player:
         player.write_log(f"[open_app] {app_name}")
 
-    if _SYSTEM == "Windows":
+    if _SYSTEM in ["Windows", "Linux"]:
         try:
             if find_and_focus_window(normalized) or find_and_focus_window(app_name):
                 return f"Switched to running instance of {app_name}."

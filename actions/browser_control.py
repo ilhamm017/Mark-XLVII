@@ -476,23 +476,39 @@ class _BrowserSession:
         if self.browser_name == "browseros":
             is_running = await asyncio.to_thread(_is_browseros_running)
             if not is_running:
-                await asyncio.to_thread(launch_browseros)
-            print("[Browser] Connecting to BrowserOS via CDP on port 9100...")
-            try:
-                browser = await self._pw.chromium.connect_over_cdp("http://127.0.0.1:9100")
-                self._browser = browser
-                self._context = browser.contexts[0] if browser.contexts else await browser.new_context()
-                pages = self._context.pages
-                normal_pages = [p for p in pages if not p.url.startswith("chrome-extension://")]
-                if normal_pages:
-                    self._page = normal_pages[-1]
+                if platform.system() == "Windows":
+                    await asyncio.to_thread(launch_browseros)
                 else:
-                    self._page = await self._context.new_page()
-                print("[Browser] ✅ Connected to BrowserOS!")
-                return
-            except Exception as e:
-                print(f"[Browser] ❌ Failed to connect to BrowserOS: {e}")
-                raise RuntimeError(f"Could not connect to BrowserOS: {e}") from e
+                    # Fallback to local chromium/firefox/brave/edge
+                    fallback_found = False
+                    for name in ["chrome", "firefox", "brave", "edge"]:
+                        spec = _resolve_browser(name)
+                        if spec and spec.get("exe"):
+                            self.browser_name = name
+                            self._spec = spec
+                            fallback_found = True
+                            print(f"[Browser] ⚠️ BrowserOS is not running on {platform.system()}. Falling back to local browser: '{name}' (exe: {spec['exe']})")
+                            break
+                    if not fallback_found:
+                        print("[Browser] ⚠️ No local browser found. Raising error.")
+
+            if self.browser_name == "browseros":
+                print("[Browser] Connecting to BrowserOS via CDP on port 9100...")
+                try:
+                    browser = await self._pw.chromium.connect_over_cdp("http://127.0.0.1:9100")
+                    self._browser = browser
+                    self._context = browser.contexts[0] if browser.contexts else await browser.new_context()
+                    pages = self._context.pages
+                    normal_pages = [p for p in pages if not p.url.startswith("chrome-extension://")]
+                    if normal_pages:
+                        self._page = normal_pages[-1]
+                    else:
+                        self._page = await self._context.new_page()
+                    print("[Browser] ✅ Connected to BrowserOS!")
+                    return
+                except Exception as e:
+                    print(f"[Browser] ❌ Failed to connect to BrowserOS: {e}")
+                    raise RuntimeError(f"Could not connect to BrowserOS: {e}") from e
 
         if self._spec is None:
             raise RuntimeError(
