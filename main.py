@@ -90,7 +90,7 @@ from memory.memory_manager import (
 
 from actions.file_processor import file_processor
 from actions.flight_finder     import flight_finder
-from actions.open_app          import open_app, list_installed_apps
+from actions.open_app          import open_app
 from actions.weather_report    import weather_action
 from actions.send_message      import send_message
 from actions.reminder          import reminder
@@ -107,9 +107,9 @@ from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
 from actions.system_monitor    import SystemMonitor, get_system_status
 from actions.ytmusic_control   import ytmusic_control
-from actions.taskbar_manager   import list_taskbar_apps, get_active_window
 from actions.system_control    import system_control
 from actions.hermes_tools      import hermes_tools
+from actions.taskbar_manager   import list_taskbar_apps, get_active_window
 
 
 def get_base_dir():
@@ -499,28 +499,11 @@ TOOL_DECLARATIONS = [
         }
     },
     {
-        "name": "list_installed_apps",
-        "description": (
-            "Returns the list of all installed applications on the system. "
-            "Use this when the user asks what apps are available, or when you are unsure "
-            "about the exact name of an application. Can filter by category or search query. "
-            "Supports categories like: Development, Network, AudioVideo, Game, Office, Graphics, System, Utility."
-        ),
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "category": {"type": "STRING", "description": "Filter by category (e.g. Development, Network, AudioVideo)"},
-                "query": {"type": "STRING", "description": "Search by app name or keyword"}
-            },
-        }
-    },
-    {
         "name": "open_app",
         "description": (
             "Opens any application on the computer. "
             "Use this whenever the user asks to open, launch, or start any app, "
-            "website, or program. Always call this tool — never just say you opened it. "
-            "If the user mentions an app you are unsure about, call list_installed_apps first."
+            "website, or program. Always call this tool — never just say you opened it."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -689,31 +672,14 @@ TOOL_DECLARATIONS = [
             "Controls the computer: volume, brightness, window management, keyboard shortcuts, "
             "typing text on screen, closing apps, fullscreen, dark mode, WiFi, restart, shutdown, "
             "scrolling, tab management, zoom, screenshots, lock screen, refresh/reload page. "
-            "Use for ANY single computer control command.\n\n"
-            "Window management actions (set action + value=app_name):\n"
-            "  minimize          — minimize active window\n"
-            "  minimize_app      — minimize a specific window by name (set value to title)\n"
-            "  close_app         — close active window (Alt+F4)\n"
-            "  close_window      — close active tab/window (Ctrl+W / wmctrl)\n"
-            "  close_window_name — close a specific window by name (set value to title)\n"
-            "  focus_app         — focus/switch to a specific window by name\n"
-            "  resize_window     — resize a specific window (pass name, width, height, x, y)\n"
-            "  maximize          — maximize active window\n"
-            "  fullscreen        — toggle fullscreen (F11)\n"
-            "When user says 'close X' or 'minimize X', ALWAYS use close_window_name or minimize_app."
+            "Use for ANY single computer control command."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "action":      {"type": "STRING", "description": "The action to perform"},
                 "description": {"type": "STRING", "description": "Natural language description of what to do"},
-                "value":       {"type": "STRING", "description": "For close_window_name/minimize_app/focus_app: the window title or app name. For volume_set: volume level 0-100. For type_text: text to type."},
-                "name":        {"type": "STRING", "description": "Window/app name for resize_window action"},
-                "app":         {"type": "STRING", "description": "Alternative window/app name for close_window_name/minimize_app/focus_app"},
-                "width":       {"type": "INTEGER", "description": "Target width for resize_window"},
-                "height":      {"type": "INTEGER", "description": "Target height for resize_window"},
-                "x":           {"type": "INTEGER", "description": "X position for resize_window"},
-                "y":           {"type": "INTEGER", "description": "Y position for resize_window"},
+                "value":       {"type": "STRING", "description": "Optional value: volume level (absolute like 50, or relative like -10, +20), text to type, etc."}
             },
             "required": []
         }
@@ -754,7 +720,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "file_controller",
-        "description": "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, find_by_content, disk usage.",
+        "description": "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, disk usage.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
@@ -763,10 +729,8 @@ TOOL_DECLARATIONS = [
                 "destination": {"type": "STRING", "description": "Destination path for move/copy"},
                 "new_name":    {"type": "STRING", "description": "New name for rename"},
                 "content":     {"type": "STRING", "description": "Content for create_file/write"},
-                "name":        {"type": "STRING", "description": "File name to search for (find action)"},
+                "name":        {"type": "STRING", "description": "File name to search for"},
                 "extension":   {"type": "STRING", "description": "File extension to search (e.g. .pdf)"},
-                "pattern":     {"type": "STRING", "description": "Text pattern to search within file contents (find_by_content action)"},
-                "file_type":   {"type": "STRING", "description": "Filter by file type for find_by_content: text, code, python, html, markdown, json, yaml"},
                 "count":       {"type": "INTEGER", "description": "Number of results for largest"},
             },
             "required": ["action"]
@@ -1235,12 +1199,20 @@ class JarvisLive:
             threading.Thread(target=run_sync, daemon=True).start()
             return
 
-        if not self._loop or not self.session:
+        if not self._loop:
             return
-        asyncio.run_coroutine_threadsafe(
-            self.session.send_realtime_input(text=text),
-            self._loop
-        )
+
+        async def send_when_ready():
+            for _ in range(100):
+                if self.session:
+                    break
+                await asyncio.sleep(0.1)
+            if self.session:
+                await self.session.send_realtime_input(text=text)
+            else:
+                self.ui.write_log("SYS: Failed to send command — session not ready.")
+
+        asyncio.run_coroutine_threadsafe(send_when_ready(), self._loop)
 
     def set_speaking(self, value: bool):
         with self._speaking_lock:
@@ -1515,16 +1487,6 @@ class JarvisLive:
                     msg = res_data.get("message", "Failed to queue task.")
                     result = f"Failed to submit task to Hermes: {msg}"
 
-            elif name == "list_installed_apps":
-                r = await loop.run_in_executor(
-                    None,
-                    lambda: list_installed_apps(
-                        category=args.get("category", ""),
-                        query=args.get("query", ""),
-                    )
-                )
-                result = r or "No applications found."
-
             elif name == "open_app":
                 r = await loop.run_in_executor(None, lambda: open_app(parameters=args, response=None, player=self.ui))
                 result = r or f"Opened {args.get('app_name')}."
@@ -1638,9 +1600,9 @@ class JarvisLive:
 
             else:
                 builtins = {
-                    "ask_hermes", "open_app", "list_installed_apps", "weather_report",
-                    "browser_control", "file_controller", "send_message", "ytmusic_control",
-                    "reminder", "youtube_video", "screen_process", "computer_settings",
+                    "ask_hermes", "open_app", "weather_report", "browser_control", 
+                    "file_controller", "send_message", "ytmusic_control", "reminder", 
+                    "youtube_video", "screen_process", "computer_settings", 
                     "desktop_control", "code_helper", "dev_agent", "web_search",
                     "file_processor", "computer_control", "game_updater", "flight_finder",
                     "system_status", "shutdown_alice", "save_memory", "system_control", "hermes_tools"
@@ -1793,9 +1755,6 @@ class JarvisLive:
                                 self._turn_done_event.set()
 
                             self._turn_count += 1
-                            if self._turn_count >= 12:
-                                self.ui.write_log("SYS: Session rotated to maintain low latency.")
-                                asyncio.create_task(self.session.close())
 
                             full_in = " ".join(in_buf).strip()
                             if full_in:
@@ -1851,16 +1810,17 @@ class JarvisLive:
                 try:
                     chunk = await asyncio.wait_for(
                         self.audio_in_queue.get(),
-                        timeout=0.5   # 500ms poll — lebih hemat CPU saat idle
+                        timeout=0.1
                     )
                     idle_ticks = 0
                 except asyncio.TimeoutError:
                     self.ui.set_speaking_volume(0.0)
                     if stream is not None:
                         idle_ticks += 1
-                        if idle_ticks >= 60:  # 30s of silence before closing (60 × 500ms)
+                        if idle_ticks >= 5: # 0.5s of silence
                             try:
-                                stream.close()   # close() otomatis stop jika masih aktif
+                                stream.stop()
+                                stream.close()
                             except Exception:
                                 pass
                             stream = None
@@ -1874,6 +1834,9 @@ class JarvisLive:
                     ):
                         self.set_speaking(False)
                         self._turn_done_event.clear()
+                        if self._turn_count >= 12 and self.session:
+                            self.ui.write_log("SYS: Session rotated to maintain low latency.")
+                            asyncio.create_task(self.session.close())
                     continue
 
                 self.set_speaking(True)
@@ -1919,12 +1882,9 @@ class JarvisLive:
                 except Exception as we:
                     print(f"[ALICE] Play chunk error (possibly stream closed): {we}")
                     if stream is not None:
-                        # Tunggu sebentar agar background thread ALSA/PortAudio
-                        # selesai memproses error sebelum stream dibersihkan,
-                        # mencegah memory corruption (malloc: unaligned tcache chunk)
-                        await asyncio.sleep(0.2)
                         try:
-                            stream.close()   # close() sudah stop stream secara internal
+                            stream.stop()
+                            stream.close()
                         except Exception:
                             pass
                         stream = None
