@@ -24,6 +24,11 @@ if sys.stderr is not None and hasattr(sys.stderr, 'reconfigure'):
         pass
 
 import asyncio
+# Define TaskGroup drop-in replacement for Python < 3.11
+if sys.version_info >= (3, 11):
+    from asyncio import TaskGroup
+else:
+    from taskgroup import TaskGroup
 import os
 os.environ["QT_LOGGING_RULES"] = "qt.qpa.window.warning=false"
 import re
@@ -1906,7 +1911,7 @@ class JarvisLive:
 
                 async with (
                     client.aio.live.connect(model=live_model, config=config) as session,
-                    asyncio.TaskGroup() as tg,
+                    TaskGroup() as tg,
                 ):
                     self.session          = session
                     self.audio_in_queue   = asyncio.Queue()
