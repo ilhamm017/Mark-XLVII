@@ -255,6 +255,99 @@ async def call_browseros_mcp_tool(name: str, arguments: dict) -> dict:
             raise Exception(f"MCP Tool Error: {res_json['error']}")
         return res_json.get("result", {})
 
+def parse_mcp_response(text: str) -> dict:
+    import json
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    data_lines = []
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            data_lines.append(line[5:].strip())
+    if data_lines:
+        try:
+            return json.loads("".join(data_lines))
+        except Exception as e:
+            raise Exception(f"Failed to parse SSE JSON: {e}. Raw content: {text}")
+    raise Exception(f"Unable to parse MCP response. Raw content: {text}")
+
+async def fetch_vscode_mcp_tools() -> list:
+    import httpx
+    try:
+        async with httpx.AsyncClient() as client:
+            list_payload = {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list"
+            }
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream"
+            }
+            resp = await client.post("http://127.0.0.1:3017/mcp", json=list_payload, headers=headers, timeout=3.0)
+            resp.raise_for_status()
+            parsed = parse_mcp_response(resp.text)
+            mcp_tools = parsed.get("result", {}).get("tools", [])
+            
+            declarations = []
+            for tool in mcp_tools:
+                name = tool.get("name")
+                desc = tool.get("description")
+                input_schema = tool.get("inputSchema", {})
+                parameters = convert_schema_to_uppercase(input_schema)
+                
+                declarations.append({
+                    "name": name,
+                    "description": desc,
+                    "parameters": parameters
+                })
+            print(f"[VS Code MCP] Dynamic tool registration: Loaded {len(declarations)} tools.")
+            return declarations
+    except Exception as e:
+        print(f"[VS Code MCP] Could not load MCP tools: {e}")
+        return []
+
+async def call_vscode_mcp_tool(name: str, arguments: dict) -> dict:
+    import httpx
+    init_payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "alice-assistant",
+                "version": "1.0.0"
+            }
+        }
+    }
+    call_payload = {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": name,
+            "arguments": arguments
+        },
+        "id": 3
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream"
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            await client.post("http://127.0.0.1:3017/mcp", json=init_payload, headers=headers, timeout=5.0)
+        except Exception:
+            pass  # If initialization fails, try calling the tool anyway
+        resp = await client.post("http://127.0.0.1:3017/mcp", json=call_payload, headers=headers, timeout=120.0)
+        resp.raise_for_status()
+        parsed = parse_mcp_response(resp.text)
+        if "error" in parsed:
+            raise Exception(f"VS Code MCP Tool Error: {parsed['error']}")
+        return parsed.get("result", {})
+
 def _get_api_key() -> str:
     with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)["gemini_api_key"]
@@ -1244,8 +1337,12 @@ class JarvisLive:
                     "system_status", "shutdown_alice", "save_memory"
                 }
                 if name not in builtins:
-                    print(f"[ALICE] Forwarding {name} call to BrowserOS MCP server...")
-                    mcp_res = await call_browseros_mcp_tool(name, args)
+                    if name.endswith("_code"):
+                        print(f"[ALICE] Forwarding {name} call to VS Code MCP server...")
+                        mcp_res = await call_vscode_mcp_tool(name, args)
+                    else:
+                        print(f"[ALICE] Forwarding {name} call to BrowserOS MCP server...")
+                        mcp_res = await call_browseros_mcp_tool(name, args)
                     result = mcp_res
                 else:
                     result = f"Unknown tool: {name}"
@@ -1760,12 +1857,18 @@ class JarvisLive:
         self._wake_event = asyncio.Event()
         self._wake_event.set()
 
-        # Fetch BrowserOS MCP tools on startup
+        # Fetch BrowserOS and VS Code MCP tools on startup
+        self.mcp_tools = []
         try:
-            self.mcp_tools = await fetch_browseros_mcp_tools()
+            browser_tools = await fetch_browseros_mcp_tools()
+            self.mcp_tools.extend(browser_tools)
         except Exception as e:
-            print(f"[ALICE] Failed fetching MCP tools: {e}")
-            self.mcp_tools = []
+            print(f"[ALICE] Failed fetching BrowserOS MCP tools: {e}")
+        try:
+            vscode_tools = await fetch_vscode_mcp_tools()
+            self.mcp_tools.extend(vscode_tools)
+        except Exception as e:
+            print(f"[ALICE] Failed fetching VS Code MCP tools: {e}")
 
         client = genai.Client(
             api_key=_get_api_key(),
