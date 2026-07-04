@@ -1580,6 +1580,30 @@ class SettingsWindow(QDialog):
 
         try:
             API_FILE.write_text(json.dumps(cfg, indent=4), encoding="utf-8")
+
+            # Synchronize to Hermes config.yaml
+            try:
+                import yaml
+                from pathlib import Path
+                hermes_config_path = Path(API_FILE).parent.parent / ".hermes" / "config.yaml"
+                if hermes_config_path.exists():
+                    with open(hermes_config_path, "r", encoding="utf-8") as f:
+                        hermes_cfg = yaml.safe_load(f) or {}
+
+                    if "honcho" not in hermes_cfg:
+                        hermes_cfg["honcho"] = {}
+
+                    hermes_cfg["honcho"]["base_url"] = cfg["honcho_base_url"]
+                    hermes_cfg["honcho"]["peer_name"] = cfg["honcho_peer_name"]
+                    hermes_cfg["honcho"]["workspace_id"] = cfg["honcho_workspace"]
+                    hermes_cfg["honcho"]["enabled"] = True
+
+                    with open(hermes_config_path, "w", encoding="utf-8") as f:
+                        yaml.safe_dump(hermes_cfg, f, default_flow_style=False)
+                    print(f"[Settings] Successfully synchronized Honcho config to Hermes: {hermes_config_path}")
+            except Exception as ex:
+                print(f"[Settings] Failed to sync Honcho config to Hermes: {ex}")
+
             self.accept()
         except Exception as e:
             print(f"[Settings] Failed to write config: {e}")
