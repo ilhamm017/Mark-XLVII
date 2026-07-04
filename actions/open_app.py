@@ -769,7 +769,79 @@ def open_app(
 
     # Redirect browser app launches to BrowserOS (launch if needed)
     app_name_lower = app_name.lower().strip()
-    is_browser_app = app_name_lower in ["chrome", "google chrome", "browser", "browseros", "edge", "msedge", "firefox", "brave", "opera", "operagx"]
+
+    if app_name_lower in ["firefox", "mozilla firefox"]:
+        # Specialized handler for Firefox to write user.js and launch with --marionette
+        try:
+            # 1. Write user.js to Firefox profiles to ensure marionette port is 6000
+            import os
+            import platform
+            from pathlib import Path
+            
+            if platform.system() == "Windows":
+                appdata = os.environ.get("APPDATA", "")
+                firefox_base = Path(appdata) / "Mozilla" / "Firefox"
+                profiles_ini = firefox_base / "profiles.ini"
+                if profiles_ini.exists():
+                    import configparser
+                    config = configparser.ConfigParser()
+                    config.read(profiles_ini)
+                    default_path = None
+                    
+                    for section in config.sections():
+                        if section.startswith("Profile"):
+                            is_default = config.get(section, "Default", fallback="0") == "1"
+                            name = config.get(section, "Name", fallback="").lower()
+                            path = config.get(section, "Path", fallback="")
+                            is_relative = config.get(section, "IsRelative", fallback="1") == "1"
+                            
+                            if is_default or "release" in name:
+                                full_path = firefox_base / path if is_relative else Path(path)
+                                if full_path.exists():
+                                    default_path = full_path
+                                    if "release" in name:
+                                        break
+                                        
+                    if default_path:
+                        user_js = default_path / "user.js"
+                        content = 'user_pref("marionette.port", 6000);\nuser_pref("marionette.enabled", true);\n'
+                        user_js.write_text(content, encoding="utf-8")
+                        print(f"[open_app] Wrote user.js to {user_js}")
+            
+            # 2. Launch Firefox with --marionette
+            firefox_exe = None
+            if platform.system() == "Windows":
+                paths = [
+                    Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "Mozilla Firefox" / "firefox.exe",
+                    Path(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")) / "Mozilla Firefox" / "firefox.exe",
+                ]
+                for p in paths:
+                    if p.exists():
+                        firefox_exe = str(p)
+                        break
+                if not firefox_exe:
+                    import winreg
+                    try:
+                        k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe")
+                        firefox_exe = winreg.QueryValue(k, None).strip().strip('"')
+                        winreg.CloseKey(k)
+                    except Exception:
+                        pass
+                        
+            if not firefox_exe:
+                firefox_exe = shutil.which("firefox")
+                
+            if firefox_exe and Path(firefox_exe).exists():
+                print(f"[open_app] Launching Firefox with marionette: {firefox_exe}")
+                import subprocess
+                subprocess.Popen([firefox_exe, "--marionette"])
+                time.sleep(1.5)
+                return "Launched Firefox with Marionette enabled on port 6000."
+                
+        except Exception as e:
+            print(f"[open_app] Failed to configure/launch Firefox with marionette: {e}")
+
+    is_browser_app = app_name_lower in ["chrome", "google chrome", "browser", "browseros", "edge", "msedge", "brave", "opera", "operagx"]
 
     if is_browser_app:
         try:

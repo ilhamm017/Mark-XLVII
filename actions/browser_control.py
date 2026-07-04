@@ -979,10 +979,14 @@ class _SessionRegistry:
         raw_name = browser_name
         if browser_name:
             browser_name = _ALIASES.get(browser_name.lower().strip(), browser_name.lower().strip())
-        if _is_browseros_running():
-            browser_name = "browseros"
-        elif not browser_name:
-            browser_name = "browseros"
+        
+        # Only default to browseros if no browser was requested
+        if not browser_name:
+            if _is_browseros_running():
+                browser_name = "browseros"
+            else:
+                browser_name = "chrome"
+                
         if browser_name == "browseros" and not _is_browseros_running():
             launched = launch_browseros()
             if not launched:
@@ -1284,6 +1288,125 @@ def _run_via_mcp(action: str, params: dict) -> str | None:
     return None  # Not supported via MCP
 
 
+def _call_firefox_mcp(tool_name: str, args: dict = None) -> dict:
+    if args is None:
+        args = {}
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {"name": tool_name, "arguments": args},
+        "id": 1,
+    }
+    headers = {"Content-Type": "application/json"}
+    try:
+        url = "http://127.0.0.1:8085/firefox/mcp"
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            if "error" in data:
+                raise RuntimeError(f"MCP error: {data['error']}")
+            return data.get("result", {})
+    except Exception as e:
+        raise RuntimeError(f"Firefox MCP call '{tool_name}' failed: {e}") from e
+
+
+def _run_via_firefox_mcp(action: str, params: dict) -> str | None:
+    from urllib.parse import quote
+
+    def call_mcp_checked(tool_name: str, args: dict = None) -> dict:
+        res = _call_firefox_mcp(tool_name, args)
+        if isinstance(res, dict) and "content" in res:
+            for item in res["content"]:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text_val = item.get("text", "")
+                    if "MCP error" in text_val or "Error:" in text_val:
+                        raise RuntimeError(f"MCP tool execution failed: {text_val}")
+        return res
+
+    try:
+        if action == "go_to":
+            url = params.get("url", "")
+            call_mcp_checked("new_page", {"url": url})
+            return f"Opened: {url}"
+
+        if action == "new_tab":
+            url = params.get("url", "about:blank")
+            call_mcp_checked("new_page", {"url": url})
+            return "New tab opened."
+
+        if action == "close_tab":
+            r = call_mcp_checked("list_pages")
+            pages = []
+            if "content" in r:
+                for c in r["content"]:
+                    if c.get("type") == "text":
+                        text = c.get("text", "")
+                        for line in text.splitlines():
+                            if line.startswith("*"):
+                                parts = line[1:].split(":", 1)
+                                if parts:
+                                    pages.append(int(parts[0].strip()))
+            idx = pages[0] if pages else 0
+            call_mcp_checked("close_page", {"pageIdx": idx})
+            return "Closed active Firefox tab."
+
+        if action == "get_text":
+            r = call_mcp_checked("take_snapshot", {"maxLines": 500})
+            if "content" in r:
+                for c in r["content"]:
+                    if c.get("type") == "text":
+                        return c.get("text", "")[:4000]
+            return "No content."
+
+        if action == "get_url":
+            r = call_mcp_checked("list_pages")
+            if "content" in r:
+                for c in r["content"]:
+                    if c.get("type") == "text":
+                        text = c.get("text", "")
+                        for line in text.splitlines():
+                            if line.startswith("*"):
+                                import re
+                                m = re.search(r'\((https?://[^\)]+)\)', line)
+                                if m:
+                                    return m.group(1)
+            return "unknown"
+
+        if action == "back":
+            call_mcp_checked("navigate_history", {"direction": "back"})
+            return "Navigated back."
+
+        if action == "forward":
+            call_mcp_checked("navigate_history", {"direction": "forward"})
+            return "Navigated forward."
+
+        if action == "reload":
+            return "Reload action not directly supported via Firefox MCP."
+
+        if action == "screenshot":
+            path = params.get("path")
+            if path:
+                call_mcp_checked("screenshot_page", {"saveTo": path})
+                return f"Screenshot saved to {path}."
+            else:
+                default_path = str(Path.home() / "Desktop" / "firefox_screenshot.png")
+                call_mcp_checked("screenshot_page", {"saveTo": default_path})
+                return f"Screenshot saved to {default_path}."
+
+        if action == "search":
+            query = params.get("query", "")
+            engine = params.get("engine", "google")
+            url = f"https://{engine}.com/search?q={quote(query)}"
+            call_mcp_checked("new_page", {"url": url})
+            return f"Searching {engine} for '{query}'"
+
+    except Exception as e:
+        return f"Firefox MCP action failed: {e}"
+
+    return None
+
+
 def browser_control(
     parameters:    dict = None,
     response=None,
@@ -1313,14 +1436,27 @@ def browser_control(
         _log(player, result)
         return result
 
-    # Determine if BrowserOS MCP should be used
+    # Determine if BrowserOS MCP or Firefox MCP should be used
     use_mcp = False
+    use_firefox_mcp = False
     if action not in ("close",):
-        if not browser or browser in ("browseros", ""):
+        if browser in ("firefox", "mozilla firefox"):
+            use_firefox_mcp = True
+        elif not browser or browser in ("browseros", ""):
             if _is_browseros_running():
                 use_mcp = True
             elif launch_browseros():
                 use_mcp = True
+
+    if use_firefox_mcp:
+        try:
+            mcp_result = _run_via_firefox_mcp(action, params)
+            if mcp_result is not None:
+                _log(player, mcp_result)
+                return mcp_result
+            print(f"[Browser] Firefox MCP doesn't support '{action}', falling back to Playwright")
+        except Exception as e:
+            print(f"[Browser] Firefox MCP failed for '{action}': {e}, falling back to Playwright")
 
     if use_mcp:
         try:
