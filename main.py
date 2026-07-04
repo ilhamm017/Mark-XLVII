@@ -486,14 +486,14 @@ TOOL_DECLARATIONS = [
     {
         "name": "ask_hermes",
         "description": (
-            "Routes a complex programming, system administration, coding, or server task to the Hermes agent. "
-            "Use this whenever the user asks for Hermes, needs help with servers, deep coding tasks, "
-            "remote repository management, or complex reasoning that Hermes is suited for."
+            "Routes a complex programming, coding, server task, or ANY task you lack a built-in tool or capability to execute. "
+            "If the user asks for a capability or action you don't have a direct tool for, route the query to Hermes "
+            "so he can write the script, modify ALICE's files, or execute the required workflow autonomously."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "query": {"type": "STRING", "description": "The command or question for Hermes"}
+                "query": {"type": "STRING", "description": "The request or task for Hermes"}
             },
             "required": ["query"]
         }
