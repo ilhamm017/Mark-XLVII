@@ -1115,6 +1115,7 @@ class JarvisLive:
         self.browseros_tool_names = set()
         self.custom_tool_names    = set()
         self._wake_event      = None
+        self._session_resumption_handle = None
         import time
         self._last_activity_time = time.time()
         self.ui._win.on_wake_requested = self._wake_up
@@ -1698,13 +1699,17 @@ class JarvisLive:
             parts=[types.Part.from_text(text="\n".join(parts))]
         )
 
+        handle = getattr(self, "_session_resumption_handle", None)
+        if handle:
+            print(f"[ALICE] Resuming session with handle: {handle[:15]}...")
+
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             output_audio_transcription={},
             input_audio_transcription={},
             system_instruction=system_instruction_content,
             tools=[{"function_declarations": combined_tools}],
-            session_resumption=types.SessionResumptionConfig(),
+            session_resumption=types.SessionResumptionConfig(handle=handle),
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
@@ -2060,6 +2065,12 @@ class JarvisLive:
                 async for response in self.session.receive():
                     import time
                     self._last_activity_time = time.time()
+
+                    if response.session_resumption_update:
+                        sru = response.session_resumption_update
+                        if sru.resumable and sru.new_handle:
+                            self._session_resumption_handle = sru.new_handle
+                            print(f"[ALICE] Saved session resumption handle: {sru.new_handle[:15]}...")
 
                     if response.data:
                         if self._turn_done_event and self._turn_done_event.is_set():
@@ -2604,6 +2615,7 @@ class JarvisLive:
 
                 config = self._build_config()
 
+                connection_established = False
                 async with (
                     client.aio.live.connect(model=live_model, config=config) as session,
                     TaskGroup() as tg,
@@ -2619,6 +2631,7 @@ class JarvisLive:
                     self._last_voice_time = 0.0
 
                     print("[ALICE] Connected.")
+                    connection_established = True
                     self.ui.set_state("LISTENING")
                     self.ui.write_log("SYS: ALICE online.")
 
@@ -2640,6 +2653,10 @@ class JarvisLive:
                         tg.create_task(self._send_startup_briefing())
 
             except Exception as e:
+                if not connection_established and getattr(self, "_session_resumption_handle", None):
+                    print(f"[ALICE] Resumption handshake failed. Clearing handle: {e}")
+                    self._session_resumption_handle = None
+
                 is_normal = False
                 is_api_error = False
                 try:
