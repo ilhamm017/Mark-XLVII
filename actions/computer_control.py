@@ -255,6 +255,66 @@ def _focus_window(title: str) -> str:
 
     if os_name == "windows":
         try:
+            import ctypes
+            import time
+            
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            
+            found_hwnds = []
+            
+            def callback(hwnd, lParam):
+                if user32.IsWindowVisible(hwnd):
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    if length > 0:
+                        buff = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, buff, length + 1)
+                        window_title = buff.value
+                        if title.lower() in window_title.lower():
+                            found_hwnds.append((hwnd, window_title))
+                return True
+                
+            cb = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)(callback)
+            user32.EnumWindows(cb, 0)
+            
+            if found_hwnds:
+                hwnd, matched_title = found_hwnds[0]
+                
+                if user32.IsIconic(hwnd):
+                    user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                    time.sleep(0.1)
+                
+                fore_hwnd = user32.GetForegroundWindow()
+                fore_thread = user32.GetWindowThreadProcessId(fore_hwnd, 0)
+                current_thread = kernel32.GetCurrentThreadId()
+                
+                attached = False
+                if fore_thread != current_thread and fore_thread != 0:
+                    try:
+                        attached = bool(user32.AttachThreadInput(current_thread, fore_thread, True))
+                    except Exception:
+                        pass
+                
+                user32.ShowWindow(hwnd, 5)  # SW_SHOW
+                success = bool(user32.SetForegroundWindow(hwnd))
+                user32.SetActiveWindow(hwnd)
+                
+                if attached:
+                    try:
+                        user32.AttachThreadInput(current_thread, fore_thread, False)
+                    except Exception:
+                        pass
+                
+                if not success or user32.GetForegroundWindow() != hwnd:
+                    user32.keybd_event(0x12, 0, 0, 0)  # Alt Down
+                    user32.SetForegroundWindow(hwnd)
+                    user32.keybd_event(0x12, 0, 2, 0)  # Alt Up
+                
+                return f"Focused window: {matched_title} (HWND: {hwnd})"
+        except Exception as e:
+            print(f"[ComputerControl] ctypes focus failed: {e}")
+
+        try:
             script = f'(New-Object -ComObject WScript.Shell).AppActivate("{title}")'
             subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
