@@ -1407,8 +1407,11 @@ class JarvisLive:
         # Sync ALICE memory to Hermes memories before execution
         self._sync_memory_to_hermes()
         
+        project_dir = os.path.dirname(os.path.abspath(__file__))
+        
         try:
             import httpx
+            import json
             # Try to send query to daemon server first
             daemon_url = "http://127.0.0.1:8085/query"
             print(f"[ALICE] Attempting to route query to Hermes Daemon: {daemon_url}")
@@ -1417,24 +1420,57 @@ class JarvisLive:
             response_text = ""
             
             try:
-                async with httpx.AsyncClient(timeout=300.0) as client:
-                    resp = await client.post(daemon_url, json={"query": query})
-                    if resp.status_code == 200:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.post(daemon_url, json={"query": query, "task_id": task_id})
+                    if resp.status_code == 200 and resp.json().get("status") == "started":
                         use_daemon = True
-                        response_text = resp.json().get("response", "")
             except Exception as daemon_err:
-                print(f"[ALICE] Hermes Daemon not reachable or failed: {daemon_err}. Falling back to hermes.exe subprocess.")
+                print(f"[ALICE] Hermes Daemon not reachable or failed to start: {daemon_err}. Falling back to hermes.exe subprocess.")
                 
             if use_daemon:
+                # Poll and tail log file in real-time, checking for the done file
+                log_path = os.path.join(project_dir, ".hermes", "logs", f"{task_id}.log")
+                done_path = os.path.join(project_dir, ".hermes", "logs", f"{task_id}.done")
+                
+                last_pos = 0
+                while True:
+                    if os.path.exists(log_path):
+                        try:
+                            with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                                f.seek(last_pos)
+                                lines = f.readlines()
+                                last_pos = f.tell()
+                                
+                            for line in lines:
+                                line_str = line.strip()
+                                if line_str:
+                                    import re
+                                    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+                                    clean_str = ansi_escape.sub('', line_str)
+                                    if clean_str:
+                                        print(f"[ALICE] [Local Hermes] {clean_str}")
+                                        self.ui.write_log(f"HERMES: {clean_str}")
+                        except Exception as read_err:
+                            print(f"[ALICE] Error reading local Hermes log: {read_err}")
+                            
+                    if os.path.exists(done_path):
+                        try:
+                            with open(done_path, "r", encoding="utf-8") as f:
+                                done_data = json.load(f)
+                            if done_data.get("status") == "success":
+                                response_text = done_data.get("response", "")
+                            else:
+                                raise RuntimeError(done_data.get("error", "Unknown error in Hermes task."))
+                            break
+                        except json.JSONDecodeError:
+                            # Done file might be partially written, sleep and retry
+                            pass
+                            
+                    await asyncio.sleep(0.5)
+                    
                 print(f"[ALICE] 🔄 HERMES (Daemon): Local task {task_id} completed.")
                 self.ui.write_log(f"HERMES: Local task {task_id} completed (Daemon).")
                 
-                # Print lines to log like we used to
-                for line_str in response_text.splitlines():
-                    if line_str.strip():
-                        print(f"[ALICE] [Local Hermes] {line_str}")
-                        self.ui.write_log(f"HERMES: {line_str}")
-                        
                 if hasattr(self.ui, "show_content"):
                     self.ui.show_content(f"LOCAL HERMES RESPONSE ({task_id})", response_text)
                     
