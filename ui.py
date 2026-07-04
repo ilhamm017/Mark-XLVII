@@ -140,6 +140,35 @@ class _SysMetrics:
         except Exception:
             pass
 
+        # Windows WMI fallback (for AMD/Intel/NVIDIA)
+        if _OS == "Windows":
+            try:
+                cmd = (
+                    "powershell", "-NoProfile", "-Command",
+                    "$g = Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine; "
+                    "if ($g) { "
+                    "  $engines = $g | ForEach-Object { "
+                    "    $type = 'Other'; "
+                    "    if ($_.Name -match '_engtype_(.+)$') { $type = $Matches[1] }; "
+                    "    [PSCustomObject]@{ Type = $type; Util = $_.UtilizationPercentage } "
+                    "  }; "
+                    "  ($engines | Group-Object Type | ForEach-Object { ($_.Group | Measure-Object Util -Sum).Sum } | Measure-Object -Maximum).Maximum "
+                    "} else { 0 }"
+                )
+                r = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                    creationflags=_SUBPROCESS_FLAGS
+                )
+                if r.returncode == 0:
+                    val_str = r.stdout.strip()
+                    if val_str:
+                        return float(val_str)
+            except Exception:
+                pass
+
         # AMD (Linux)
         if _OS == "Linux":
             try:
