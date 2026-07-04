@@ -1175,19 +1175,35 @@ def _run_via_mcp(action: str, params: dict) -> str | None:
     """Try to run browser action via BrowserOS MCP. Returns result string or None if not supported."""
     from urllib.parse import quote
 
+    # Helper function to invoke MCP and check if the returned content blocks denote an MCP error.
+    def call_mcp_checked(tool_name: str, args: dict = None) -> dict:
+        res = _call_browseros_mcp(tool_name, args)
+        if isinstance(res, dict) and "content" in res:
+            for item in res["content"]:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text_val = item.get("text", "")
+                    if "MCP error" in text_val or "Error:" in text_val:
+                        raise RuntimeError(f"MCP tool execution failed: {text_val}")
+        return res
+
     mcp_actions = {
-        "go_to": lambda p: _call_browseros_mcp("new_page", {"url": p.get("url", ""), "background": False}),
-        "new_tab": lambda p: _call_browseros_mcp("new_page", {"url": p.get("url", "about:blank"), "background": False}),
-        "press": lambda p: _call_browseros_mcp(
-            "press_key", {"page": _get_active_page_id(), "key": p.get("key", "Enter")}
+        "go_to": lambda p: (
+            call_mcp_checked("navigate", {"action": "url", "page": _get_active_page_id(), "url": p.get("url", "")})
+            if _get_active_page_id() else
+            call_mcp_checked("tabs", {"action": "new", "url": p.get("url", ""), "background": False})
+        ),
+        "new_tab": lambda p: call_mcp_checked("tabs", {"action": "new", "url": p.get("url", "about:blank"), "background": False}),
+        "press": lambda p: call_mcp_checked(
+            "act", {"page": _get_active_page_id(), "kind": "press", "key": p.get("key", "Enter")}
         ) if _get_active_page_id() else {"error": "No active page."},
-        "scroll": lambda p: _call_browseros_mcp("scroll", {
+        "scroll": lambda p: call_mcp_checked("act", {
             "page": _get_active_page_id(),
+            "kind": "scroll",
             "direction": p.get("direction", "down"),
             "amount": int(p.get("amount", 3)),
         }) if _get_active_page_id() else {"error": "No active page."},
-        "close_tab": lambda p: _call_browseros_mcp(
-            "close_page", {"page": _get_active_page_id()}
+        "close_tab": lambda p: call_mcp_checked(
+            "tabs", {"action": "close", "page": _get_active_page_id()}
         ) if _get_active_page_id() else {"error": "No active page."},
     }
 
@@ -1196,7 +1212,7 @@ def _run_via_mcp(action: str, params: dict) -> str | None:
         pid = _get_active_page_id()
         if not pid:
             return "No active page."
-        r = _call_browseros_mcp("get_page_content", {"page": pid})
+        r = call_mcp_checked("read", {"page": pid, "format": "text"})
         sc = r.get("structuredContent") or {}
         text = sc.get("content") or r.get("content") or r.get("text", "")
         if isinstance(text, list):
@@ -1212,7 +1228,7 @@ def _run_via_mcp(action: str, params: dict) -> str | None:
         pid = _get_active_page_id()
         if not pid:
             return "No active page."
-        r = _call_browseros_mcp("evaluate_script", {"page": pid, "expression": "window.location.href"})
+        r = call_mcp_checked("evaluate", {"page": pid, "code": "return window.location.href;"})
         sc = r.get("structuredContent") or {}
         value = sc.get("value") or r.get("value") or ""
         if not value:
@@ -1226,35 +1242,35 @@ def _run_via_mcp(action: str, params: dict) -> str | None:
         pid = _get_active_page_id()
         if not pid:
             return "No active page."
-        _call_browseros_mcp("evaluate_script", {"page": pid, "expression": "window.history.back()"})
+        call_mcp_checked("navigate", {"action": "back", "page": pid})
         return "Navigated back."
 
     if action == "forward":
         pid = _get_active_page_id()
         if not pid:
             return "No active page."
-        _call_browseros_mcp("evaluate_script", {"page": pid, "expression": "window.history.forward()"})
+        call_mcp_checked("navigate", {"action": "forward", "page": pid})
         return "Navigated forward."
 
     if action == "reload":
         pid = _get_active_page_id()
         if not pid:
             return "No active page."
-        _call_browseros_mcp("evaluate_script", {"page": pid, "expression": "window.location.reload()"})
+        call_mcp_checked("navigate", {"action": "reload", "page": pid})
         return "Page reloaded."
 
     if action == "screenshot":
         pid = _get_active_page_id()
         if not pid:
             return "No active page."
-        r = _call_browseros_mcp("take_screenshot", {"page": pid})
+        r = call_mcp_checked("screenshot", {"page": pid})
         return f"Screenshot taken: {str(r)[:200]}"
 
     if action == "search":
         query = params.get("query", "")
         engine = params.get("engine", "google")
         url = f"https://{engine}.com/search?q={quote(query)}"
-        r = _call_browseros_mcp("new_page", {"url": url, "background": False})
+        r = call_mcp_checked("tabs", {"action": "new", "url": url, "background": False})
         return f"Searching {engine} for '{query}'"
 
     # Check simple mcp_actions map
