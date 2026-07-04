@@ -118,6 +118,19 @@ def apply_windows_utf8_bootstrap() -> bool:
             except (OSError, ValueError):
                 pass
 
+    # 3. Patch subprocess to prevent console window popups on Windows
+    try:
+        import subprocess
+        _original_popen = subprocess.Popen
+        class PatchedPopen(_original_popen):
+            def __init__(self, *args, **kwargs):
+                if "creationflags" not in kwargs:
+                    kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                super().__init__(*args, **kwargs)
+        subprocess.Popen = PatchedPopen
+    except Exception:
+        pass
+
     _bootstrap_applied = True
     return True
 
