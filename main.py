@@ -1454,7 +1454,8 @@ class JarvisLive:
                                     clean_str = ansi_escape.sub('', line_str)
                                     if clean_str:
                                         print(f"[ALICE] [Local Hermes] {clean_str}")
-                                        self.ui.write_log(f"HERMES: {clean_str}")
+                                        # Do not write to general activity log since we have a dedicated Hermes logs view
+                                        # self.ui.write_log(f"HERMES: {clean_str}")
                         except Exception as read_err:
                             print(f"[ALICE] Error reading local Hermes log: {read_err}")
                             
@@ -1529,7 +1530,8 @@ class JarvisLive:
                         clean_str = ansi_escape.sub('', line_str)
                         if clean_str:
                             print(f"[ALICE] [Local Hermes] {clean_str}")
-                            self.ui.write_log(f"HERMES: {clean_str}")
+                            # Do not write to general activity log since we have a dedicated Hermes logs view
+                            # self.ui.write_log(f"HERMES: {clean_str}")
                             stdout_lines.append(clean_str)
                         
             async def read_stderr():
