@@ -261,6 +261,38 @@ def _focus_window(title: str) -> str:
             user32 = ctypes.windll.user32
             kernel32 = ctypes.windll.kernel32
             
+            # Declare strict signatures for 64-bit Windows compatibility
+            user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
+            user32.IsWindowVisible.restype = ctypes.c_bool
+            
+            user32.GetWindowTextLengthW.argtypes = [ctypes.c_void_p]
+            user32.GetWindowTextLengthW.restype = ctypes.c_int
+            
+            user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+            user32.GetWindowTextW.restype = ctypes.c_int
+            
+            user32.IsIconic.argtypes = [ctypes.c_void_p]
+            user32.IsIconic.restype = ctypes.c_bool
+            
+            user32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            user32.ShowWindow.restype = ctypes.c_bool
+            
+            user32.GetForegroundWindow.restype = ctypes.c_void_p
+            
+            user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+            user32.GetWindowThreadProcessId.restype = ctypes.c_ulong
+            
+            kernel32.GetCurrentThreadId.restype = ctypes.c_ulong
+            
+            user32.AttachThreadInput.argtypes = [ctypes.c_ulong, ctypes.c_ulong, ctypes.c_bool]
+            user32.AttachThreadInput.restype = ctypes.c_bool
+            
+            user32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+            user32.SetForegroundWindow.restype = ctypes.c_bool
+            
+            user32.SetActiveWindow.argtypes = [ctypes.c_void_p]
+            user32.SetActiveWindow.restype = ctypes.c_void_p
+            
             found_hwnds = []
             
             def callback(hwnd, lParam):
@@ -274,7 +306,7 @@ def _focus_window(title: str) -> str:
                             found_hwnds.append((hwnd, window_title))
                 return True
                 
-            cb = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)(callback)
+            cb = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(callback)
             user32.EnumWindows(cb, 0)
             
             if found_hwnds:
