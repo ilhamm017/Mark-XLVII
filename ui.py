@@ -2543,6 +2543,8 @@ class MainWindow(QMainWindow):
             current_tasks = []
             for f in log_files:
                 task_id = os.path.basename(f)[:-4]
+                if task_id in ("agent", "errors"):
+                    continue
                 done_file = os.path.join(logs_dir, f"{task_id}.done")
                 is_running = not os.path.exists(done_file)
                 status_str = "🟢" if is_running else "⚪"
