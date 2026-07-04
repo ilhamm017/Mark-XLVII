@@ -353,26 +353,51 @@ def find_files(name: str = "", extension: str = "",
                     except Exception:
                         continue
 
-        # Fallback to pure Python rglob
+        # Fallback to smart os.walk search with directory pruning
         if not results:
+            skip_dirs = {
+                'appdata', 'application data', 'local settings', 'node_modules', 
+                'venv', '.git', '.cache', '__pycache__', 'temp', 'recycle.bin', 
+                'cookies', 'nethood', 'printhood', 'recent', 'sendto', 'start menu', 
+                'templates', '$recycle.bin', 'system volume information'
+            }
             dir_count = 0
-            max_dirs = 2000
-            for item in search_path.rglob("*"):
-                if item.is_dir():
+            max_dirs = 5000  # Pruned search allows traversing more relevant directories safely
+            
+            try:
+                for root, dirs, files in os.walk(search_path, topdown=True):
+                    # Prune noise directories in-place to avoid traversing them
+                    dirs[:] = [d for d in dirs if d.lower() not in skip_dirs and not d.startswith('.')]
+                    
                     dir_count += 1
                     if dir_count > max_dirs:
                         break
-                    continue
-                if not item.is_file():
-                    continue
-                if extension and item.suffix.lower() != extension.lower():
-                    continue
-                if name and name.lower() not in item.name.lower():
-                    continue
-                size = _format_size(item.stat().st_size)
-                results.append(f"📄 {item.name} ({size}) — {item.parent}")
-                if len(results) >= max_results:
-                    break
+                        
+                    for f in files:
+                        # Match extension
+                        if extension:
+                            _, ext = os.path.splitext(f)
+                            if ext.lower() != extension.lower():
+                                continue
+                        # Match name pattern
+                        if name and name.lower() not in f.lower():
+                            continue
+                            
+                        full_path = Path(root) / f
+                        try:
+                            if full_path.is_file():
+                                sz = _format_size(full_path.stat().st_size)
+                                results.append(f"📄 {f} ({sz}) — {full_path.parent}")
+                                if len(results) >= max_results:
+                                    break
+                        except Exception:
+                            results.append(f"📄 {f} — {full_path.parent}")
+                            if len(results) >= max_results:
+                                break
+                    if len(results) >= max_results:
+                        break
+            except Exception as walk_err:
+                print(f"[file_controller] os.walk error: {walk_err}")
 
         if not results:
             query = name or extension or "files"
