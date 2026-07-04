@@ -26,4 +26,5 @@ win10toast; sys_platform == "win32"
 pywinauto; sys_platform == "win32"
 qrcode[pil]
 taskgroup; python_version < "3.11"
+pypdf
 
