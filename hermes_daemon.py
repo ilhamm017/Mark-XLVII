@@ -103,9 +103,9 @@ def start_firefox_mcp():
         t2 = threading.Thread(target=firefox_dispatcher, daemon=True)
         t2.start()
         
-        print("[Daemon] 🦊 Firefox DevTools MCP bridge started.")
+        print("[Daemon] Firefox DevTools MCP bridge started.")
     except Exception as e:
-        print(f"[Daemon] ❌ Failed to start Firefox DevTools MCP subprocess: {e}")
+        print(f"[Daemon] Failed to start Firefox DevTools MCP subprocess: {e}")
 
 app = FastAPI()
 
