@@ -1426,6 +1426,43 @@ class JarvisLive:
         self._sync_memory_to_hermes()
         
         try:
+            import httpx
+            # Try to send query to daemon server first
+            daemon_url = "http://127.0.0.1:8085/query"
+            print(f"[ALICE] Attempting to route query to Hermes Daemon: {daemon_url}")
+            
+            use_daemon = False
+            response_text = ""
+            
+            try:
+                async with httpx.AsyncClient(timeout=300.0) as client:
+                    resp = await client.post(daemon_url, json={"query": query})
+                    if resp.status_code == 200:
+                        use_daemon = True
+                        response_text = resp.json().get("response", "")
+            except Exception as daemon_err:
+                print(f"[ALICE] Hermes Daemon not reachable or failed: {daemon_err}. Falling back to hermes.exe subprocess.")
+                
+            if use_daemon:
+                print(f"[ALICE] 🔄 HERMES (Daemon): Local task {task_id} completed.")
+                self.ui.write_log(f"HERMES: Local task {task_id} completed (Daemon).")
+                
+                # Print lines to log like we used to
+                for line_str in response_text.splitlines():
+                    if line_str.strip():
+                        print(f"[ALICE] [Local Hermes] {line_str}")
+                        self.ui.write_log(f"HERMES: {line_str}")
+                        
+                if hasattr(self.ui, "show_content"):
+                    self.ui.show_content(f"LOCAL HERMES RESPONSE ({task_id})", response_text)
+                    
+                # Sync memory back from Hermes to ALICE
+                self._sync_memory_from_hermes()
+                
+                await self.speak_when_ready(f"Sir, local task {task_id} has been completed. Here is the response:\n{response_text}")
+                return
+
+            # FALLBACK to standard subprocess run
             import os
             import sys
             scripts_dir = os.path.dirname(sys.executable)
@@ -1487,7 +1524,7 @@ class JarvisLive:
                 if hasattr(self.ui, "show_content"):
                     self.ui.show_content(f"LOCAL HERMES RESPONSE ({task_id})", full_output)
                 
-                # Sync memory back from Hermes to ALICE long_term.json
+                # Sync memory back from Hermes to ALICE
                 self._sync_memory_from_hermes()
                 
                 await self.speak_when_ready(f"Sir, local task {task_id} has been completed. Here is the response:\n{full_output}")
@@ -1501,6 +1538,33 @@ class JarvisLive:
             print(f"[ALICE] ❌ Exception in local Hermes execution: {e}")
             self.ui.write_log(f"SYS: Local Hermes task {task_id} exception: {e}")
             await self.speak_when_ready(f"Sir, I encountered an error running local Hermes task {task_id}: {str(e)}")
+
+    async def _start_hermes_daemon(self):
+        print("[ALICE] 🔄 Starting Hermes Daemon...")
+        import os
+        import sys
+        import httpx
+        
+        project_dir = os.path.dirname(os.path.abspath(__file__))
+        daemon_path = os.path.join(project_dir, 'hermes_daemon.py')
+        
+        # Kill any existing daemon on port 8085 first
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post("http://127.0.0.1:8085/shutdown", timeout=1.0)
+                await asyncio.sleep(0.5)
+        except Exception:
+            pass
+            
+        try:
+            self._hermes_daemon_proc = await asyncio.create_subprocess_exec(
+                sys.executable, daemon_path,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL
+            )
+            print("[ALICE] 🔄 Hermes Daemon started successfully on port 8085.")
+        except Exception as e:
+            print(f"[ALICE] ❌ Failed to start Hermes Daemon: {e}")
 
     async def _poll_hermes_task(self, task_id: str, query: str):
         print(f"[ALICE] 🔄 SYS: Started polling task {task_id} for query: {query}")
@@ -1837,6 +1901,11 @@ class JarvisLive:
             elif name == "shutdown_alice":
                 self.ui.write_log("SYS: Shutdown requested.")
                 self.speak("Goodbye, sir.")
+                if hasattr(self, "_hermes_daemon_proc") and self._hermes_daemon_proc:
+                    try:
+                        self._hermes_daemon_proc.terminate()
+                    except Exception:
+                        pass
                 def _shutdown():
                     import time, os
                     time.sleep(1)
@@ -2430,6 +2499,9 @@ class JarvisLive:
         except Exception as e:
             print(f"[Dashboard] Disabled: {e}")
             self._dashboard = None
+
+        # Start Hermes Daemon
+        asyncio.create_task(self._start_hermes_daemon())
 
         while True:
             try:

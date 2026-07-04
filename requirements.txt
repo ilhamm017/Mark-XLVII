@@ -27,4 +27,5 @@ pywinauto; sys_platform == "win32"
 qrcode[pil]
 taskgroup; python_version < "3.11"
 pypdf
+httpx
 
