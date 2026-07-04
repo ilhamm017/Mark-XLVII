@@ -476,8 +476,54 @@ def find_and_focus_window(app_name: str) -> bool:
         
     return False
 
-def _launch_windows(app_name: str) -> bool:
+def _scan_windows_apps() -> dict[str, Path]:
+    import os
+    apps = {}
+    paths = []
+    
+    # Common Start Menu
+    program_data = os.environ.get("ProgramData", "C:\\ProgramData")
+    paths.append(Path(program_data) / "Microsoft" / "Windows" / "Start Menu")
+    
+    # User Start Menu
+    app_data = os.environ.get("APPDATA")
+    if app_data:
+        paths.append(Path(app_data) / "Microsoft" / "Windows" / "Start Menu")
+        
+    for base_path in paths:
+        if not base_path.is_dir():
+            continue
+        for root, dirs, files in os.walk(base_path):
+            for file in files:
+                if file.lower().endswith(".lnk") or file.lower().endswith(".url"):
+                    name = Path(file).stem
+                    full_path = Path(root) / file
+                    apps[name.lower()] = full_path
+    return apps
 
+def _match_windows_lnk(app_name: str) -> Path | None:
+    apps = _scan_windows_apps()
+    q = app_name.lower().strip()
+    
+    # 1) Exact match
+    if q in apps:
+        return apps[q]
+        
+    # 2) Substring match
+    candidates = []
+    for name, path in apps.items():
+        if q in name:
+            candidates.append((len(name) - len(q), path))
+    if candidates:
+        candidates.sort()
+        return candidates[0][1]
+        
+    return None
+
+def _launch_windows(app_name: str) -> bool:
+    import os
+
+    # 1) Try standard PATH binary lookup
     if shutil.which(app_name) or shutil.which(app_name.split(".")[0]):
         try:
             subprocess.Popen(
@@ -492,6 +538,18 @@ def _launch_windows(app_name: str) -> bool:
         except Exception as e:
             print(f"[open_app] subprocess failed: {e}")
 
+    # 2) Try Start Menu shortcut matching (.lnk / .url files)
+    try:
+        lnk_path = _match_windows_lnk(app_name)
+        if lnk_path:
+            print(f"[open_app] Found Windows Start Menu shortcut: {lnk_path}")
+            os.startfile(lnk_path)
+            time.sleep(1.5)
+            return True
+    except Exception as e:
+        print(f"[open_app] Start Menu shortcut launch failed: {e}")
+
+    # 3) Try protocol schemes (e.g. ms-settings:)
     if ":" in app_name:
         try:
             subprocess.Popen(f"start {app_name}", shell=True, creationflags=0x08000000)
@@ -500,18 +558,29 @@ def _launch_windows(app_name: str) -> bool:
         except Exception:
             pass
 
-    try:
-        import pyautogui
-        pyautogui.PAUSE = 0.1
-        pyautogui.press("win")
-        time.sleep(0.7)
-        pyautogui.write(app_name, interval=0.05)
-        time.sleep(0.9)
-        pyautogui.press("enter")
-        time.sleep(2.5)
-        return True
-    except Exception as e:
-        print(f"[open_app] Start Menu search failed: {e}")
+    # 4) Last resort: Try pyautogui but ONLY if it is a known common alias
+    known_aliases = [
+        "chrome", "google chrome", "firefox", "edge", "msedge", "brave", "safari", "opera",
+        "whatsapp", "telegram", "discord", "slack", "zoom", "teams", "skype", "signal",
+        "spotify", "vlc", "netflix", "vscode", "visual studio code", "code", "terminal",
+        "cmd", "powershell", "postman", "git", "figma", "blender", "word", "excel",
+        "powerpoint", "libreoffice", "notepad", "textedit", "explorer", "file explorer",
+        "finder", "task manager", "settings", "calculator", "paint", "instagram", "tiktok",
+        "notion", "obsidian", "capcut", "steam", "epic"
+    ]
+    if app_name.lower().strip() in known_aliases:
+        try:
+            import pyautogui
+            pyautogui.PAUSE = 0.1
+            pyautogui.press("win")
+            time.sleep(0.7)
+            pyautogui.write(app_name, interval=0.05)
+            time.sleep(0.9)
+            pyautogui.press("enter")
+            time.sleep(2.5)
+            return True
+        except Exception as e:
+            print(f"[open_app] Start Menu search failed: {e}")
 
     return False
 
