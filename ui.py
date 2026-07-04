@@ -2548,6 +2548,17 @@ class MainWindow(QMainWindow):
                 done_file = os.path.join(logs_dir, f"{task_id}.done")
                 is_running = not os.path.exists(done_file)
                 status_str = "🟢" if is_running else "⚪"
+                
+                # Keep only running tasks, or tasks completed in the last 15 minutes (900 seconds)
+                if not is_running:
+                    try:
+                        mtime = os.path.getmtime(done_file)
+                        import time
+                        if time.time() - mtime > 900:
+                            continue
+                    except Exception:
+                        pass
+                
                 current_tasks.append((task_id, f"{status_str} {task_id}"))
                 
             selected_task_id = self._hermes_task_combo.currentData()
