@@ -12,10 +12,29 @@ def get_base_dir() -> Path:
 
 
 BASE_DIR         = get_base_dir()
-MEMORY_PATH      = BASE_DIR / "memory" / "long_term.json"
 _lock            = Lock()
 MAX_VALUE_LENGTH = 380
 MEMORY_MAX_CHARS = 2200
+
+def get_user_name() -> str:
+    user_name = "ilham"
+    try:
+        base_dir = get_base_dir()
+        config_path = base_dir / "config" / "api_keys.json"
+        if config_path.exists():
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                user_name = cfg.get("user_name", "ilham").lower().strip()
+    except Exception:
+        pass
+    return user_name
+
+def get_memory_path() -> Path:
+    import os
+    user_name = get_user_name()
+    home_dir = os.path.expanduser("~")
+    user_suffix = f"_{user_name}" if user_name != "ilham" else ""
+    return Path(home_dir) / ".hermes" / "memories" / f"USER{user_suffix}.md"
 
 def _empty_memory() -> dict:
     return {
@@ -28,20 +47,33 @@ def _empty_memory() -> dict:
     }
 
 def load_memory() -> dict:
-    if not MEMORY_PATH.exists():
+    import re
+    memory_path = get_memory_path()
+    if not memory_path.exists():
         return _empty_memory()
     with _lock:
         try:
-            data = json.loads(MEMORY_PATH.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                base = _empty_memory()
-                for key in base:
-                    if key not in data:
-                        data[key] = {}
-                return data
-            return _empty_memory()
+            content = memory_path.read_text(encoding="utf-8")
+            data = _empty_memory()
+            chunks = [c.strip() for c in content.split("§") if c.strip()]
+            for chunk in chunks:
+                match = re.match(r"^Category\s+\[([^\]]+)\]\s+([^:]+):\s*(.*)$", chunk, re.IGNORECASE)
+                if match:
+                    cat = match.group(1).strip()
+                    key = match.group(2).strip()
+                    val = match.group(3).strip()
+                    
+                    if cat not in data:
+                        data[cat] = {}
+                    data[cat][key] = {"value": val}
+                else:
+                    words = [w for w in re.sub(r'[^a-zA-Z0-9\s]', '', chunk).split() if w]
+                    if words:
+                        key = "_".join(words[:3]).lower()
+                        data["notes"][key] = {"value": chunk}
+            return data
         except Exception as e:
-            print(f"[Memory] ⚠️ Load error: {e}")
+            print(f"[Memory] ⚠️ Load error from {memory_path}: {e}")
             return _empty_memory()
 
 def _all_entries(memory: dict) -> list[tuple]:
@@ -71,12 +103,27 @@ def save_memory(memory: dict) -> None:
     if not isinstance(memory, dict):
         return
     memory = _trim_to_limit(memory)
-    MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    memory_path = get_memory_path()
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    facts = []
+    for cat, items in memory.items():
+        if not isinstance(items, dict):
+            continue
+        for key, entry in items.items():
+            if isinstance(entry, dict) and "value" in entry:
+                val = entry.get("value")
+                if val:
+                    facts.append(f"Category [{cat}] {key}: {val}")
+            elif isinstance(entry, str) and entry:
+                facts.append(f"Category [{cat}] {key}: {entry}")
+                
+    content = "\n§\n".join(facts)
     with _lock:
-        MEMORY_PATH.write_text(
-            json.dumps(memory, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        try:
+            memory_path.write_text(content, encoding="utf-8")
+        except Exception as e:
+            print(f"[Memory] ⚠️ Save error to {memory_path}: {e}")
 
 
 def _truncate_value(val: str) -> str:
