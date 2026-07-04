@@ -41,7 +41,7 @@ API_FILE   = CONFIG_DIR / "api_keys.json"
 
 _DEFAULT_W, _DEFAULT_H = 980, 700
 _MIN_W,     _MIN_H     = 820, 580
-_LEFT_W  = 240
+_LEFT_W  = 170
 _RIGHT_W = 340
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
@@ -667,8 +667,8 @@ class MetricBar(QWidget):
         self._color = color
         self._value = 0.0       # 0–100
         self._text  = "--"
-        self.setFixedHeight(38)
-        self.setMinimumWidth(80)
+        self.setFixedHeight(28)
+        self.setMinimumWidth(60)
 
     def set_value(self, pct: float, text: str):
         self._value = max(0.0, min(100.0, pct))
@@ -682,17 +682,17 @@ class MetricBar(QWidget):
 
         p.setBrush(QBrush(qcol(C.PANEL2)))
         p.setPen(QPen(qcol(C.BORDER_A), 1))
-        p.drawRoundedRect(QRectF(1, 1, W - 2, H - 2), 4, 4)
+        p.drawRoundedRect(QRectF(1, 1, W - 2, H - 2), 3, 3)
 
-        bar_h   = 4
-        bar_y   = H - bar_h - 5
-        bar_w   = W - 12
-        bar_x   = 6
+        bar_h   = 3
+        bar_y   = H - bar_h - 4
+        bar_w   = W - 10
+        bar_x   = 5
         fill_w  = int(bar_w * self._value / 100)
 
         p.setBrush(QBrush(qcol(C.BAR_BG)))
         p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(QRectF(bar_x, bar_y, bar_w, bar_h), 2, 2)
+        p.drawRoundedRect(QRectF(bar_x, bar_y, bar_w, bar_h), 1.5, 1.5)
 
         if self._value > 85:
             bar_col = qcol(C.RED)
@@ -703,15 +703,15 @@ class MetricBar(QWidget):
 
         if fill_w > 0:
             p.setBrush(QBrush(bar_col))
-            p.drawRoundedRect(QRectF(bar_x, bar_y, fill_w, bar_h), 2, 2)
+            p.drawRoundedRect(QRectF(bar_x, bar_y, fill_w, bar_h), 1.5, 1.5)
 
         p.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
         p.setPen(QPen(qcol(C.TEXT_DIM), 1))
-        p.drawText(QRectF(8, 5, 50, 14), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._label)
+        p.drawText(QRectF(6, 2, 40, 12), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._label)
 
-        p.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        p.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
         p.setPen(QPen(bar_col if self._text != "--" else qcol(C.TEXT_DIM), 1))
-        p.drawText(QRectF(0, 4, W - 6, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._text)
+        p.drawText(QRectF(0, 1, W - 6, 14), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._text)
 
 class LogWidget(QTextEdit):
     _sig        = pyqtSignal(str)
@@ -2665,138 +2665,87 @@ class MainWindow(QMainWindow):
         w.setFixedWidth(_LEFT_W)
         w.setStyleSheet(f"background: rgba(0, 13, 20, 220); border-right: 1px solid {C.BORDER};")
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(8, 10, 8, 10)
-        lay.setSpacing(6)
+        lay.setContentsMargins(6, 8, 6, 8)
+        lay.setSpacing(4)
 
         hdr = QLabel("◈ SYS MONITOR")
         hdr.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
         hdr.setStyleSheet(f"color: {C.PRI}; background: transparent; "
-                          f"border-bottom: 1px solid {C.BORDER}; padding-bottom: 4px;")
+                          f"border-bottom: 1px solid {C.BORDER}; padding-bottom: 3px;")
         lay.addWidget(hdr)
-        lay.addSpacing(2)
+        lay.addSpacing(1)
 
         # Row 1: CPU + TMP and MEM
         row1_layout = QHBoxLayout()
-        row1_layout.setSpacing(6)
+        row1_layout.setContentsMargins(0, 0, 0, 0)
+        row1_layout.setSpacing(4)
 
-        # Card CPU
-        card_cpu = QFrame()
-        card_cpu.setStyleSheet(f"QFrame {{ background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 6px; }}")
-        cpu_lay = QVBoxLayout(card_cpu)
-        cpu_lay.setContentsMargins(6, 6, 6, 6)
-        cpu_lay.setSpacing(4)
-        cpu_title = QLabel("◈ CPU")
-        cpu_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
-        cpu_title.setStyleSheet(f"color: {C.PRI}; background: transparent; border: none;")
-        cpu_lay.addWidget(cpu_title)
-        
+        cpu_col = QVBoxLayout()
+        cpu_col.setContentsMargins(0, 0, 0, 0)
+        cpu_col.setSpacing(3)
         self._bar_cpu = MetricBar("CPU", C.PRI)
         self._bar_tmp = MetricBar("TMP", "#ff6688")
-        cpu_lay.addWidget(self._bar_cpu)
-        cpu_lay.addWidget(self._bar_tmp)
+        cpu_col.addWidget(self._bar_cpu)
+        cpu_col.addWidget(self._bar_tmp)
 
-        # Card MEM
-        card_mem = QFrame()
-        card_mem.setStyleSheet(f"QFrame {{ background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 6px; }}")
-        mem_lay = QVBoxLayout(card_mem)
-        mem_lay.setContentsMargins(6, 6, 6, 6)
-        mem_lay.setSpacing(4)
-        mem_title = QLabel("◈ MEM")
-        mem_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
-        mem_title.setStyleSheet(f"color: {C.PRI}; background: transparent; border: none;")
-        mem_lay.addWidget(mem_title)
-        
+        mem_col = QVBoxLayout()
+        mem_col.setContentsMargins(0, 0, 0, 0)
+        mem_col.setSpacing(3)
         self._bar_mem = MetricBar("MEM", C.ACC2)
-        mem_lay.addWidget(self._bar_mem)
-        mem_lay.addStretch()
+        mem_col.addWidget(self._bar_mem)
+        mem_col.addStretch()
 
-        row1_layout.addWidget(card_cpu, stretch=1)
-        row1_layout.addWidget(card_mem, stretch=1)
+        row1_layout.addLayout(cpu_col, stretch=1)
+        row1_layout.addLayout(mem_col, stretch=1)
         lay.addLayout(row1_layout)
 
         # Row 2: NET and GPU
         row2_layout = QHBoxLayout()
-        row2_layout.setSpacing(6)
+        row2_layout.setContentsMargins(0, 0, 0, 0)
+        row2_layout.setSpacing(4)
 
-        # Card NET
-        card_net = QFrame()
-        card_net.setStyleSheet(f"QFrame {{ background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 6px; }}")
-        net_lay = QVBoxLayout(card_net)
-        net_lay.setContentsMargins(6, 6, 6, 6)
-        net_lay.setSpacing(4)
-        net_title = QLabel("◈ NET")
-        net_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
-        net_title.setStyleSheet(f"color: {C.PRI}; background: transparent; border: none;")
-        net_lay.addWidget(net_title)
-        
         self._bar_net = MetricBar("NET", C.GREEN)
-        net_lay.addWidget(self._bar_net)
-        net_lay.addStretch()
-
-        # Card GPU
-        card_gpu = QFrame()
-        card_gpu.setStyleSheet(f"QFrame {{ background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 6px; }}")
-        gpu_lay = QVBoxLayout(card_gpu)
-        gpu_lay.setContentsMargins(6, 6, 6, 6)
-        gpu_lay.setSpacing(4)
-        gpu_title = QLabel("◈ GPU")
-        gpu_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
-        gpu_title.setStyleSheet(f"color: {C.PRI}; background: transparent; border: none;")
-        gpu_lay.addWidget(gpu_title)
-        
         self._bar_gpu = MetricBar("GPU", C.ACC)
-        gpu_lay.addWidget(self._bar_gpu)
-        gpu_lay.addStretch()
-
-        row2_layout.addWidget(card_net, stretch=1)
-        row2_layout.addWidget(card_gpu, stretch=1)
+        row2_layout.addWidget(self._bar_net, stretch=1)
+        row2_layout.addWidget(self._bar_gpu, stretch=1)
         lay.addLayout(row2_layout)
 
-        # Card INFO
-        info_panel = QFrame()
-        info_panel.setStyleSheet(
-            f"QFrame {{ background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 6px; }}"
-        )
+        # Card INFO (borderless, just simple transparent layout)
+        info_panel = QWidget()
+        info_panel.setStyleSheet("background: transparent; border: none;")
         ip_lay = QVBoxLayout(info_panel)
-        ip_lay.setContentsMargins(8, 6, 8, 6)
-        ip_lay.setSpacing(4)
-
-        info_title = QLabel("◈ SYSTEM INFO")
-        info_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
-        info_title.setStyleSheet(f"color: {C.PRI}; background: transparent; border: none;")
-        ip_lay.addWidget(info_title)
+        ip_lay.setContentsMargins(4, 2, 4, 2)
+        ip_lay.setSpacing(2)
 
         self._uptime_lbl = QLabel("UP  --:--")
-        self._uptime_lbl.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
-        self._uptime_lbl.setStyleSheet(f"color: {C.GREEN}; background: transparent; border: none;")
+        self._uptime_lbl.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._uptime_lbl.setStyleSheet(f"color: {C.GREEN}; background: transparent;")
         ip_lay.addWidget(self._uptime_lbl)
 
         self._proc_lbl = QLabel("PROC  --")
-        self._proc_lbl.setFont(QFont("Courier New", 8))
-        self._proc_lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent; border: none;")
+        self._proc_lbl.setFont(QFont("Courier New", 7))
+        self._proc_lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
         ip_lay.addWidget(self._proc_lbl)
 
         os_name = {"Windows": "WIN", "Darwin": "macOS", "Linux": "LINUX"}.get(_OS, _OS.upper())
         os_lbl = QLabel(f"OS  {os_name}")
-        os_lbl.setFont(QFont("Courier New", 8))
-        os_lbl.setStyleSheet(f"color: {C.ACC2}; background: transparent; border: none;")
+        os_lbl.setFont(QFont("Courier New", 7))
+        os_lbl.setStyleSheet(f"color: {C.ACC2}; background: transparent;")
         ip_lay.addWidget(os_lbl)
 
         lay.addWidget(info_panel)
 
-        # Card HERMES PROCESS LOGS
-        hermes_card = QFrame()
-        hermes_card.setStyleSheet(
-            f"QFrame {{ background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 6px; }}"
-        )
-        hermes_lay = QVBoxLayout(hermes_card)
-        hermes_lay.setContentsMargins(6, 6, 6, 6)
-        hermes_lay.setSpacing(4)
+        # Separator line
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
+        lay.addWidget(sep)
 
-        hermes_title = QLabel("◈ HERMES LOGS")
-        hermes_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
-        hermes_title.setStyleSheet(f"color: {C.PRI}; background: transparent; border: none;")
-        hermes_lay.addWidget(hermes_title)
+        # HERMES PROCESS LOGS (directly laid out)
+        hermes_hdr = QLabel("◈ HERMES LOGS")
+        hermes_hdr.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        hermes_hdr.setStyleSheet(f"color: {C.PRI}; background: transparent; padding-bottom: 2px;")
+        lay.addWidget(hermes_hdr)
 
         self._hermes_task_combo = QComboBox()
         self._hermes_task_combo.setFont(QFont("Courier New", 8))
@@ -2814,7 +2763,7 @@ class MainWindow(QMainWindow):
                 border: 1px solid {C.BORDER};
             }}
         """)
-        hermes_lay.addWidget(self._hermes_task_combo)
+        lay.addWidget(self._hermes_task_combo)
 
         self._hermes_log_view = QPlainTextEdit()
         self._hermes_log_view.setReadOnly(True)
@@ -2827,11 +2776,9 @@ class MainWindow(QMainWindow):
                 border-radius: 3px;
             }}
         """)
-        hermes_lay.addWidget(self._hermes_log_view, stretch=1)
+        lay.addWidget(self._hermes_log_view, stretch=1)
 
         self._hermes_task_combo.currentIndexChanged.connect(self._refresh_hermes_log_view)
-
-        lay.addWidget(hermes_card, stretch=1)
 
         return w
     def _build_right_panel(self) -> QWidget:
