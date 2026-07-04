@@ -1240,34 +1240,15 @@ class JarvisLive:
             else:
                 query = query[7:]
             
-            def run_sync():
-                self.ui.set_state("THINKING")
-                self.ui.write_log(f"Routing to Hermes: {query}")
-                try:
-                    import requests
-                    res = requests.post(self.get_server_url("/api/hermes/ask"), json={"query": query}, timeout=10)
-                    if res.status_code == 200:
-                        res_data = res.json()
-                        if res_data.get("status") == "queued":
-                            task_id = res_data.get("task_id")
-                            self.ui.write_log(f"SYS: Task queued successfully. ID: {task_id}")
-                            if self._loop:
-                                asyncio.run_coroutine_threadsafe(
-                                    self._poll_hermes_task(task_id, query),
-                                    self._loop
-                                )
-                            else:
-                                self.ui.write_log("SYS: Async loop not running. Cannot poll task status.")
-                        else:
-                            msg = res_data.get("message", "Failed to queue task.")
-                            self.ui.write_log(f"SYS: {msg}")
-                    else:
-                        self.ui.write_log(f"SYS: Hermes error {res.status_code}")
-                except Exception as e:
-                    self.ui.write_log(f"SYS: Failed to reach Hermes: {e}")
-                self.ui.set_state("SLEEPING")
-
-            threading.Thread(target=run_sync, daemon=True).start()
+            import uuid
+            task_id = f"local_{uuid.uuid4().hex[:6]}"
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self._run_local_hermes_task(task_id, query),
+                    self._loop
+                )
+            else:
+                self.ui.write_log("SYS: Async loop not running. Cannot execute Hermes task.")
             return
 
         if not self._loop:
@@ -1655,28 +1636,15 @@ class JarvisLive:
         from datetime import datetime
         import requests
 
-        # Try to pull synced memory from Armbian server (Honcho)
+        # Pull memory directly from Honcho server
         mem_str = ""
-        user_name = "ilham"
         try:
-            with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-                user_name = cfg.get("user_name", "ilham").lower().strip()
-        except Exception:
-            pass
-
-        try:
-            res = requests.get(self.get_server_url(f"/api/hermes/memory?user={user_name}"), timeout=5)
-            if res.status_code == 200:
-                mem_str = res.json().get("prompt_string", "")
-                print(f"[Memory] Dynamically loaded Honcho memory for {user_name} from server.")
-        except Exception as e:
-            print(f"[Memory] Server connection failed, falling back to local: {e}")
-
-        # Fallback to local memory if server query fails or returns empty
-        if not mem_str:
             memory = load_memory()
             mem_str = format_memory_for_prompt(memory)
+            if mem_str:
+                print("[Memory] Dynamically loaded memory directly from Honcho server.")
+        except Exception as e:
+            print(f"[Memory] Failed to load memory directly from Honcho server: {e}")
 
         sys_prompt = _load_system_prompt()
 
@@ -1758,26 +1726,11 @@ class JarvisLive:
             key      = args.get("key", "")
             value    = args.get("value", "")
             if key and value:
-                update_memory({category: {key: {"value": value}}})
-                print(f"[Memory] 💾 save_memory: {category}/{key} = {value}")
-                # Sync with Armbian server (Honcho & Hermes)
                 try:
-                    import requests
-                    user_name = "ilham"
-                    try:
-                        with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-                            cfg = json.load(f)
-                            user_name = cfg.get("user_name", "ilham").lower().strip()
-                    except Exception:
-                        pass
-                    requests.post(
-                        self.get_server_url("/api/hermes/memory/save"),
-                        json={"category": category, "key": key, "value": value, "user": user_name},
-                        timeout=5
-                    )
-                    print(f"[Memory] Successfully synced save_memory for {user_name} with server.")
+                    update_memory({category: {key: {"value": value}}})
+                    print(f"[Memory] 💾 save_memory directly to Honcho: {category}/{key} = {value}")
                 except Exception as e:
-                    print(f"[Memory] Failed to sync save_memory with server: {e}")
+                    print(f"[Memory] Failed to save memory to Honcho: {e}")
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
             return types.FunctionResponse(

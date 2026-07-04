@@ -119,7 +119,9 @@ def _open_browser_url(url: str) -> bool:
         import urllib.request
         browseros_running = False
         try:
-            with urllib.request.urlopen("http://127.0.0.1:9200/health", timeout=1) as response:
+            from actions.browser_control import get_browseros_mcp_url
+            health_url = get_browseros_mcp_url().replace("/mcp", "/health")
+            with urllib.request.urlopen(health_url, timeout=1) as response:
                 browseros_running = (response.status == 200)
         except Exception:
             pass

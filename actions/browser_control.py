@@ -379,7 +379,8 @@ def _get_browseros_cdp_port() -> int:
 def _is_browseros_running() -> bool:
     try:
         import urllib.request
-        with urllib.request.urlopen("http://127.0.0.1:9200/health", timeout=1) as response:
+        health_url = get_browseros_mcp_url().replace("/mcp", "/health")
+        with urllib.request.urlopen(health_url, timeout=1) as response:
             return response.status == 200
     except Exception:
         return False
@@ -427,7 +428,8 @@ def launch_browseros() -> bool:
         for i in range(10):
             time.sleep(1.0)
             try:
-                with urllib.request.urlopen("http://127.0.0.1:9200/health", timeout=1) as response:
+                health_url = get_browseros_mcp_url().replace("/mcp", "/health")
+                with urllib.request.urlopen(health_url, timeout=1) as response:
                     if response.status == 200:
                         print("[BrowserOS] ✅ Started and healthy!")
                         return True
@@ -440,7 +442,7 @@ def launch_browseros() -> bool:
         return False
 
 
-def _get_browseros_mcp_url() -> str:
+def get_browseros_mcp_url() -> str:
     try:
         base_dir = Path(__file__).resolve().parent.parent
         config_path = base_dir / "config" / "api_keys.json"
@@ -475,7 +477,7 @@ def _call_browseros_mcp(tool_name: str, args: dict = None) -> dict:
     }
     headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
     try:
-        mcp_url = _get_browseros_mcp_url()
+        mcp_url = get_browseros_mcp_url()
         with httpx.Client(timeout=5.0) as client:
             client.post(mcp_url, json=init_payload, headers=headers)
         with httpx.Client(timeout=30.0) as client:
