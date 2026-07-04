@@ -3,13 +3,14 @@ from datetime import datetime
 from threading import Lock
 from pathlib import Path
 import sys
-
+import os
+import re
+import requests
 
 def get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent
-
 
 BASE_DIR         = get_base_dir()
 _lock            = Lock()
@@ -29,12 +30,81 @@ def get_user_name() -> str:
         pass
     return user_name
 
-def get_memory_path() -> Path:
-    import os
-    user_name = get_user_name()
-    home_dir = os.path.expanduser("~")
-    user_suffix = f"_{user_name}" if user_name != "ilham" else ""
-    return Path(home_dir) / ".hermes" / "memories" / f"USER{user_suffix}.md"
+def get_honcho_peer_id() -> str:
+    # Try AppData/Local/hermes/honcho.json
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        p = Path(appdata) / "hermes" / "honcho.json"
+        if p.exists():
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return json.load(f).get("peer_name", "760143518")
+            except Exception:
+                pass
+    
+    # Try ~/.hermes/honcho.json
+    home = os.path.expanduser("~")
+    p = Path(home) / ".hermes" / "honcho.json"
+    if p.exists():
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                return json.load(f).get("peer_name", "760143518")
+        except Exception:
+            pass
+
+    return "760143518"
+
+def get_honcho_url() -> str:
+    base_url = "http://192.168.0.102:8000"
+    
+    # Try AppData/Local/hermes/honcho.json or config.yaml
+    appdata = os.environ.get("APPDATA")
+    paths_to_check = []
+    if appdata:
+        paths_to_check.append(Path(appdata) / "hermes" / "honcho.json")
+        paths_to_check.append(Path(appdata) / "hermes" / "config.yaml")
+    
+    home = os.path.expanduser("~")
+    paths_to_check.append(Path(home) / ".hermes" / "honcho.json")
+    paths_to_check.append(Path(home) / ".hermes" / "config.yaml")
+    
+    for p in paths_to_check:
+        if p.exists():
+            try:
+                if p.suffix == ".json":
+                    with open(p, "r", encoding="utf-8") as f:
+                        val = json.load(f).get("baseUrl") or json.load(f).get("base_url")
+                        if val:
+                            base_url = val
+                            break
+                elif p.suffix in (".yaml", ".yml"):
+                    import yaml
+                    with open(p, "r", encoding="utf-8") as f:
+                        val = yaml.safe_load(f).get("honcho", {}).get("base_url")
+                        if val:
+                            base_url = val
+                            break
+            except Exception:
+                pass
+                
+    base_url = base_url.rstrip("/")
+    # Ping-test the resolved base_url, fallback to Tailscale IP if unreachable
+    try:
+        res = requests.get(f"{base_url}/health", timeout=1.5)
+        if res.status_code == 200:
+            return base_url
+    except Exception:
+        pass
+        
+    ts_url = "http://100.69.16.104:8000"
+    try:
+        res = requests.get(f"{ts_url}/health", timeout=1.5)
+        if res.status_code == 200:
+            return ts_url
+    except Exception:
+        pass
+        
+    return base_url
 
 def _empty_memory() -> dict:
     return {
@@ -47,34 +117,43 @@ def _empty_memory() -> dict:
     }
 
 def load_memory() -> dict:
-    import re
-    memory_path = get_memory_path()
-    if not memory_path.exists():
-        return _empty_memory()
+    base_url = get_honcho_url()
+    peer_id = get_honcho_peer_id()
+    workspace = "hermes"
+    
+    data = _empty_memory()
+    
     with _lock:
         try:
-            content = memory_path.read_text(encoding="utf-8")
-            data = _empty_memory()
-            chunks = [c.strip() for c in content.split("§") if c.strip()]
-            for chunk in chunks:
-                match = re.match(r"^Category\s+\[([^\]]+)\]\s+([^:]+):\s*(.*)$", chunk, re.IGNORECASE)
-                if match:
-                    cat = match.group(1).strip()
-                    key = match.group(2).strip()
-                    val = match.group(3).strip()
-                    
-                    if cat not in data:
-                        data[cat] = {}
-                    data[cat][key] = {"value": val}
-                else:
-                    words = [w for w in re.sub(r'[^a-zA-Z0-9\s]', '', chunk).split() if w]
-                    if words:
-                        key = "_".join(words[:3]).lower()
-                        data["notes"][key] = {"value": chunk}
-            return data
+            url = f"{base_url}/v3/workspaces/{workspace}/peers/{peer_id}/card"
+            res = requests.get(url, timeout=3.0)
+            if res.status_code == 200:
+                card_data = res.json()
+                peer_card = card_data.get("peer_card") or []
+                
+                for chunk in peer_card:
+                    chunk = chunk.strip()
+                    if not chunk:
+                        continue
+                    match = re.match(r"^Category\s+\[([^\]]+)\]\s+([^:]+):\s*(.*)$", chunk, re.IGNORECASE)
+                    if match:
+                        cat = match.group(1).strip()
+                        key = match.group(2).strip()
+                        val = match.group(3).strip()
+                        
+                        if cat not in data:
+                            data[cat] = {}
+                        data[cat][key] = {"value": val}
+                    else:
+                        words = [w for w in re.sub(r'[^a-zA-Z0-9\s]', '', chunk).split() if w]
+                        if words:
+                            key = "_".join(words[:3]).lower()
+                            data["notes"][key] = {"value": chunk}
+                return data
         except Exception as e:
-            print(f"[Memory] ⚠️ Load error from {memory_path}: {e}")
-            return _empty_memory()
+            print(f"[Memory] ⚠️ Load error from Honcho ({base_url}): {e}")
+            
+    return _empty_memory()
 
 def _all_entries(memory: dict) -> list[tuple]:
     entries = []
@@ -85,7 +164,6 @@ def _all_entries(memory: dict) -> list[tuple]:
             if isinstance(entry, dict) and "value" in entry:
                 entries.append((cat, key, entry))
     return entries
-
 
 def _trim_to_limit(memory: dict) -> dict:
     if len(json.dumps(memory, ensure_ascii=False)) <= MEMORY_MAX_CHARS:
@@ -103,8 +181,6 @@ def save_memory(memory: dict) -> None:
     if not isinstance(memory, dict):
         return
     memory = _trim_to_limit(memory)
-    memory_path = get_memory_path()
-    memory_path.parent.mkdir(parents=True, exist_ok=True)
     
     facts = []
     for cat, items in memory.items():
@@ -118,19 +194,23 @@ def save_memory(memory: dict) -> None:
             elif isinstance(entry, str) and entry:
                 facts.append(f"Category [{cat}] {key}: {entry}")
                 
-    content = "\n§\n".join(facts)
+    base_url = get_honcho_url()
+    peer_id = get_honcho_peer_id()
+    workspace = "hermes"
+    
     with _lock:
         try:
-            memory_path.write_text(content, encoding="utf-8")
+            url = f"{base_url}/v3/workspaces/{workspace}/peers/{peer_id}/card"
+            res = requests.put(url, json={"peer_card": facts}, timeout=3.0)
+            if res.status_code != 200:
+                print(f"[Memory] ⚠️ Save to Honcho returned status {res.status_code}: {res.text}")
         except Exception as e:
-            print(f"[Memory] ⚠️ Save error to {memory_path}: {e}")
-
+            print(f"[Memory] ⚠️ Save error to Honcho ({base_url}): {e}")
 
 def _truncate_value(val: str) -> str:
     if isinstance(val, str) and len(val) > MAX_VALUE_LENGTH:
         return val[:MAX_VALUE_LENGTH].rstrip() + "…"
     return val
-
 
 def _recursive_update(target: dict, updates: dict) -> bool:
     changed = False
@@ -154,14 +234,13 @@ def _recursive_update(target: dict, updates: dict) -> bool:
                 changed = True
     return changed
 
-
 def update_memory(memory_update: dict) -> dict:
     if not isinstance(memory_update, dict) or not memory_update:
         return load_memory()
     memory = load_memory()
     if _recursive_update(memory, memory_update):
         save_memory(memory)
-        print(f"[Memory] 💾 Saved: {list(memory_update.keys())}")
+        print(f"[Memory] 💾 Saved to Honcho: {list(memory_update.keys())}")
     return memory
 
 def format_memory_for_prompt(memory: dict | None) -> str:
@@ -247,7 +326,6 @@ def remember(key: str, value: str, category: str = "notes") -> str:
     update_memory({category: {key: {"value": value}}})
     return f"Remembered: {category}/{key} = {value}"
 
-
 def forget(key: str, category: str = "notes") -> str:
     memory = load_memory()
     cat    = memory.get(category, {})
@@ -257,6 +335,5 @@ def forget(key: str, category: str = "notes") -> str:
         save_memory(memory)
         return f"Forgotten: {category}/{key}"
     return f"Not found: {category}/{key}"
-
 
 forget_memory = forget
