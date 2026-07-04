@@ -484,6 +484,17 @@ def _clean_transcript(text: str) -> str:
 
 TOOL_DECLARATIONS = [
     {
+        "name": "view_alice_skill",
+        "description": "Loads the detailed instructions and steps for an available ALICE desktop/voice skill.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "skill_id": {"type": "STRING", "description": "The exact ID/filename of the skill (e.g. 'windows_control', 'music_playback')"}
+            },
+            "required": ["skill_id"]
+        }
+    },
+    {
         "name": "ask_hermes",
         "description": (
             "Routes a complex programming, coding, server task, or ANY task you lack a built-in tool or capability to execute. "
@@ -1123,6 +1134,66 @@ class JarvisLive:
                     pass
         return f"http://{self._resolved_server_host}{endpoint}"
 
+    def _load_all_api_keys(self) -> list[str]:
+        try:
+            with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                
+                alt_keys = data.get("gemini_api_keys")
+                if isinstance(alt_keys, list):
+                    return [k.strip() for k in alt_keys if k.strip()]
+                    
+                keys = data.get("gemini_api_key")
+                if isinstance(keys, list):
+                    return [k.strip() for k in keys if k.strip()]
+                elif isinstance(keys, str) and keys.strip():
+                    if "," in keys:
+                        return [k.strip() for k in keys.split(",") if k.strip()]
+                    return [keys.strip()]
+        except Exception as e:
+            print(f"[ALICE] Error loading API keys: {e}")
+        return []
+
+    def _load_alice_skills_manifest(self) -> str:
+        skills_dir = BASE_DIR / "skills"
+        if not skills_dir.exists():
+            try:
+                skills_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                return ""
+        
+        manifest_lines = []
+        md_files = list(skills_dir.glob("*.md"))
+        if not md_files:
+            return ""
+            
+        manifest_lines.append("[AVAILABLE ALICE DESKTOP/VOICE SKILLS]")
+        manifest_lines.append("You have access to specialized skills. If you need details on how to execute one, call `view_alice_skill` with its name.")
+        
+        for f in md_files:
+            try:
+                content = f.read_text(encoding="utf-8")
+                name = f.stem
+                description = "No description provided."
+                
+                if content.startswith("---"):
+                    end_idx = content.find("\n---\n", 3)
+                    if end_idx != -1:
+                        frontmatter_str = content[3:end_idx]
+                        for line in frontmatter_str.split("\n"):
+                            if ":" in line:
+                                k, v = line.split(":", 1)
+                                if k.strip().lower() == "name":
+                                    name = v.strip()
+                                elif k.strip().lower() == "description":
+                                    description = v.strip()
+                
+                manifest_lines.append(f"- {f.stem}: {description} (Name: {name})")
+            except Exception as e:
+                print(f"[ALICE SKILLS] Error parsing {f.name}: {e}")
+                
+        return "\n" + "\n".join(manifest_lines) + "\n\n"
+
     def _make_remote_key(self):
         """Called from Qt main thread when user presses Remote Control."""
         if self._dashboard is None:
@@ -1566,6 +1637,11 @@ class JarvisLive:
         parts = [time_ctx, env_ctx]
         if mem_str:
             parts.append(mem_str)
+
+        skills_manifest = self._load_alice_skills_manifest()
+        if skills_manifest:
+            parts.append(skills_manifest)
+
         parts.append(sys_prompt)
 
         combined_tools = TOOL_DECLARATIONS.copy()
@@ -1635,7 +1711,21 @@ class JarvisLive:
         result = "Done."
 
         try:
-            if name == "ask_hermes":
+            if name == "view_alice_skill":
+                skill_id = args.get("skill_id") or ""
+                skill_id = os.path.basename(skill_id)
+                skills_dir = BASE_DIR / "skills"
+                skill_path = skills_dir / f"{skill_id}.md"
+                if skill_path.exists():
+                    try:
+                        result = skill_path.read_text(encoding="utf-8")
+                    except Exception as e:
+                        result = f"Error reading skill {skill_id}: {e}"
+                else:
+                    skills_list = [f.stem for f in skills_dir.glob("*.md")]
+                    result = f"Skill '{skill_id}' not found. Available skills are: " + ", ".join(skills_list)
+
+            elif name == "ask_hermes":
                 query = args.get("query")
                 import uuid
                 task_id = f"local_{uuid.uuid4().hex[:6]}"
@@ -2321,11 +2411,13 @@ class JarvisLive:
             print(f"[ALICE] Failed fetching Custom MCP tools: {e}")
             self.custom_tool_names = set()
 
-        client = genai.Client(
-            api_key=_get_api_key(),
-            http_options={"api_version": "v1beta"},
-            use_direct_google=True
-        )
+        self._api_keys = self._load_all_api_keys()
+        if not self._api_keys:
+            try:
+                self._api_keys = [_get_api_key()]
+            except Exception:
+                self._api_keys = []
+        self._current_key_idx = 0
 
         # Start dashboard (optional — needs: pip install fastapi "uvicorn[standard]" cryptography)
         try:
@@ -2342,6 +2434,30 @@ class JarvisLive:
         while True:
             try:
                 await self._wake_event.wait()
+
+                if not self._api_keys:
+                    self._api_keys = self._load_all_api_keys()
+                    if not self._api_keys:
+                        try:
+                            self._api_keys = [_get_api_key()]
+                        except Exception:
+                            self._api_keys = []
+                    if not self._api_keys:
+                        print("[ALICE] No API keys available. Sleeping 5s...")
+                        await asyncio.sleep(5)
+                        continue
+
+                self._current_key_idx = self._current_key_idx % len(self._api_keys)
+                active_key = self._api_keys[self._current_key_idx]
+
+                print(f"[ALICE] Using API Key index {self._current_key_idx} (Ends with ...{active_key[-6:] if len(active_key) > 6 else ''})")
+
+                client = genai.Client(
+                    api_key=active_key,
+                    http_options={"api_version": "v1beta"},
+                    use_direct_google=True
+                )
+
                 # Try to load live_model override from config
                 live_model = LIVE_MODEL
                 try:
@@ -2392,6 +2508,19 @@ class JarvisLive:
 
             except Exception as e:
                 is_normal = False
+                is_api_error = False
+                try:
+                    from google.genai import errors as gerrors
+                    if isinstance(e, gerrors.APIError) or "RESOURCE_EXHAUSTED" in str(e) or "API_KEY_INVALID" in str(e):
+                        is_api_error = True
+                except Exception:
+                    pass
+                
+                if is_api_error or "quota" in str(e).lower() or "limit" in str(e).lower() or "key" in str(e).lower() or "unauthorized" in str(e).lower() or "forbidden" in str(e).lower():
+                    if self._api_keys:
+                        self._current_key_idx = (self._current_key_idx + 1) % len(self._api_keys)
+                        print(f"[ALICE] API error or rate limit hit. Rotating to key index {self._current_key_idx}...")
+
                 try:
                     import websockets
                     from google.genai import errors as gerrors
