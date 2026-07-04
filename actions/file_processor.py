@@ -786,14 +786,31 @@ def _process_pptx(path: Path, action: str, params: dict, speak=None) -> str:
 
     return f"Unknown PPTX action: '{action}'. Try: summarize, extract_text, analyze"
 
+def _resolve_path(raw: str) -> Path:
+    raw_str = raw.replace('\\', '/')
+    parts = raw_str.split('/', 1)
+    shortcuts = {
+        "desktop": Path.home() / "Desktop",
+        "downloads": Path.home() / "Downloads",
+        "documents": Path.home() / "Documents",
+        "home": Path.home(),
+    }
+    first_part = parts[0].strip().lower()
+    if first_part in shortcuts:
+        base = shortcuts[first_part]
+        if len(parts) > 1:
+            return base / parts[1]
+        return base
+    return Path(raw).expanduser()
+
 def file_processor(parameters: dict, player=None, speak=None) -> str:
     file_path_str = parameters.get("file_path", "").strip()
     if not file_path_str:
         return "No file path provided."
 
-    path = Path(file_path_str)
+    path = _resolve_path(file_path_str)
     if not path.exists():
-        return f"File not found: {file_path_str}"
+        return f"File not found: {file_path_str} (Resolved: {path})"
     if not path.is_file():
         return f"Path is not a file: {file_path_str}"
 
