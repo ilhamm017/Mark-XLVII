@@ -76,6 +76,11 @@ def get_hermes_home() -> Path:
     if val:
         return Path(val)
 
+    # Check if we are running inside the Mark-XLVII project repository
+    local_hermes = Path(__file__).resolve().parent.parent / ".hermes"
+    if local_hermes.exists() and local_hermes.is_dir():
+        return local_hermes
+
     # Guard: if a non-default profile is sticky-active, warn once that
     # the fallback to the default profile is almost certainly wrong.
     global _profile_fallback_warned

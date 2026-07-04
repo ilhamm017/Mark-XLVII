@@ -31,6 +31,26 @@ def get_user_name() -> str:
     return user_name
 
 def get_honcho_peer_id() -> str:
+    # Try HERMES_HOME env var
+    hermes_home = os.environ.get("HERMES_HOME")
+    if hermes_home:
+        p = Path(hermes_home) / "honcho.json"
+        if p.exists():
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return json.load(f).get("peer_name", "760143518")
+            except Exception:
+                pass
+
+    # Try local project .hermes directory
+    p = Path(BASE_DIR) / ".hermes" / "honcho.json"
+    if p.exists():
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                return json.load(f).get("peer_name", "760143518")
+        except Exception:
+            pass
+
     # Try AppData/Local/hermes/honcho.json
     appdata = os.environ.get("APPDATA")
     if appdata:
@@ -57,9 +77,19 @@ def get_honcho_peer_id() -> str:
 def get_honcho_url() -> str:
     base_url = "http://192.168.0.102:8000"
     
-    # Try AppData/Local/hermes/honcho.json or config.yaml
-    appdata = os.environ.get("APPDATA")
     paths_to_check = []
+    
+    # Try HERMES_HOME env var or local project .hermes directory first
+    hermes_home = os.environ.get("HERMES_HOME")
+    if hermes_home:
+        paths_to_check.append(Path(hermes_home) / "honcho.json")
+        paths_to_check.append(Path(hermes_home) / "config.yaml")
+        
+    paths_to_check.append(Path(BASE_DIR) / ".hermes" / "honcho.json")
+    paths_to_check.append(Path(BASE_DIR) / ".hermes" / "config.yaml")
+    
+    # Try AppData/Local/hermes/honcho.json or config.yaml fallback
+    appdata = os.environ.get("APPDATA")
     if appdata:
         paths_to_check.append(Path(appdata) / "hermes" / "honcho.json")
         paths_to_check.append(Path(appdata) / "hermes" / "config.yaml")

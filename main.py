@@ -1363,10 +1363,15 @@ class JarvisLive:
                 hermes_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'venv', 'Scripts', 'hermes.exe'))
             
             print(f"[ALICE] Using local Hermes path: {hermes_path}")
+            project_dir = os.path.dirname(os.path.abspath(__file__))
+            hermes_home = os.path.join(project_dir, '.hermes')
+            custom_env = {**os.environ, "HERMES_HOME": hermes_home}
+            
             proc = await asyncio.create_subprocess_exec(
                 hermes_path, '-z', query,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                env=custom_env
             )
             
             stdout_lines = []
