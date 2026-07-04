@@ -26,7 +26,7 @@ from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QPushButton, QScrollArea, QSizePolicy, QTextEdit,
-    QVBoxLayout, QWidget, QProgressBar, QSystemTrayIcon, QMenu,
+    QPlainTextEdit, QVBoxLayout, QWidget, QProgressBar, QSystemTrayIcon, QMenu,
     QDialog, QFormLayout, QCheckBox, QComboBox,
 )
 
@@ -41,7 +41,7 @@ API_FILE   = CONFIG_DIR / "api_keys.json"
 
 _DEFAULT_W, _DEFAULT_H = 980, 700
 _MIN_W,     _MIN_H     = 820, 580
-_LEFT_W  = 148
+_LEFT_W  = 240
 _RIGHT_W = 340
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
@@ -2527,6 +2527,77 @@ class MainWindow(QMainWindow):
         except Exception:
             self._proc_lbl.setText("PROC  --")
 
+        self._update_hermes_tasks()
+
+    def _update_hermes_tasks(self):
+        # Scan logs directory
+        import glob
+        logs_dir = os.path.join(str(BASE_DIR), ".hermes", "logs")
+        if not os.path.exists(logs_dir):
+            return
+            
+        try:
+            log_files = glob.glob(os.path.join(logs_dir, "*.log"))
+            log_files.sort(key=os.path.getmtime, reverse=True)
+            
+            current_tasks = []
+            for f in log_files:
+                task_id = os.path.basename(f)[:-4]
+                done_file = os.path.join(logs_dir, f"{task_id}.done")
+                is_running = not os.path.exists(done_file)
+                status_str = "🟢" if is_running else "⚪"
+                current_tasks.append((task_id, f"{status_str} {task_id}"))
+                
+            selected_task_id = self._hermes_task_combo.currentData()
+            
+            self._hermes_task_combo.blockSignals(True)
+            self._hermes_task_combo.clear()
+            
+            if not current_tasks:
+                self._hermes_task_combo.addItem("No active tasks", None)
+            else:
+                for task_id, display_text in current_tasks:
+                    self._hermes_task_combo.addItem(display_text, task_id)
+                    
+            if selected_task_id:
+                index = self._hermes_task_combo.findData(selected_task_id)
+                if index >= 0:
+                    self._hermes_task_combo.setCurrentIndex(index)
+                    
+            self._hermes_task_combo.blockSignals(False)
+            
+            self._refresh_hermes_log_view()
+        except Exception as e:
+            print(f"[UI] Error updating Hermes task list: {e}")
+
+    def _refresh_hermes_log_view(self):
+        task_id = self._hermes_task_combo.currentData()
+        if not task_id:
+            self._hermes_log_view.setPlainText("No task selected.")
+            return
+            
+        logs_dir = os.path.join(str(BASE_DIR), ".hermes", "logs")
+        log_path = os.path.join(logs_dir, f"{task_id}.log")
+        
+        if not os.path.exists(log_path):
+            self._hermes_log_view.setPlainText("Log file does not exist.")
+            return
+            
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+                
+                import re
+                ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+                clean_content = ansi_escape.sub('', content)
+                
+                if self._hermes_log_view.toPlainText() != clean_content:
+                    self._hermes_log_view.setPlainText(clean_content)
+                    scrollbar = self._hermes_log_view.verticalScrollBar()
+                    scrollbar.setValue(scrollbar.maximum())
+        except Exception as e:
+            self._hermes_log_view.setPlainText(f"Error reading log: {e}")
+
 
     def _build_header(self) -> QWidget:
         w = QWidget()
@@ -2604,25 +2675,96 @@ class MainWindow(QMainWindow):
         lay.addWidget(hdr)
         lay.addSpacing(2)
 
+        # Row 1: CPU + TMP and MEM
+        row1_layout = QHBoxLayout()
+        row1_layout.setSpacing(6)
+
+        # Card CPU
+        card_cpu = QFrame()
+        card_cpu.setStyleSheet(f"QFrame {{ background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 6px; }}")
+        cpu_lay = QVBoxLayout(card_cpu)
+        cpu_lay.setContentsMargins(6, 6, 6, 6)
+        cpu_lay.setSpacing(4)
+        cpu_title = QLabel("◈ CPU")
+        cpu_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        cpu_title.setStyleSheet(f"color: {C.PRI}; background: transparent; border: none;")
+        cpu_lay.addWidget(cpu_title)
+        
         self._bar_cpu = MetricBar("CPU", C.PRI)
-        self._bar_mem = MetricBar("MEM", C.ACC2)
-        self._bar_net = MetricBar("NET", C.GREEN)
-        self._bar_gpu = MetricBar("GPU", C.ACC)
         self._bar_tmp = MetricBar("TMP", "#ff6688")
+        cpu_lay.addWidget(self._bar_cpu)
+        cpu_lay.addWidget(self._bar_tmp)
 
-        for bar in [self._bar_cpu, self._bar_mem, self._bar_net,
-                    self._bar_gpu, self._bar_tmp]:
-            lay.addWidget(bar)
+        # Card MEM
+        card_mem = QFrame()
+        card_mem.setStyleSheet(f"QFrame {{ background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 6px; }}")
+        mem_lay = QVBoxLayout(card_mem)
+        mem_lay.setContentsMargins(6, 6, 6, 6)
+        mem_lay.setSpacing(4)
+        mem_title = QLabel("◈ MEM")
+        mem_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        mem_title.setStyleSheet(f"color: {C.PRI}; background: transparent; border: none;")
+        mem_lay.addWidget(mem_title)
+        
+        self._bar_mem = MetricBar("MEM", C.ACC2)
+        mem_lay.addWidget(self._bar_mem)
+        mem_lay.addStretch()
 
-        lay.addSpacing(4)
+        row1_layout.addWidget(card_cpu, stretch=1)
+        row1_layout.addWidget(card_mem, stretch=1)
+        lay.addLayout(row1_layout)
 
-        info_panel = QWidget()
+        # Row 2: NET and GPU
+        row2_layout = QHBoxLayout()
+        row2_layout.setSpacing(6)
+
+        # Card NET
+        card_net = QFrame()
+        card_net.setStyleSheet(f"QFrame {{ background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 6px; }}")
+        net_lay = QVBoxLayout(card_net)
+        net_lay.setContentsMargins(6, 6, 6, 6)
+        net_lay.setSpacing(4)
+        net_title = QLabel("◈ NET")
+        net_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        net_title.setStyleSheet(f"color: {C.PRI}; background: transparent; border: none;")
+        net_lay.addWidget(net_title)
+        
+        self._bar_net = MetricBar("NET", C.GREEN)
+        net_lay.addWidget(self._bar_net)
+        net_lay.addStretch()
+
+        # Card GPU
+        card_gpu = QFrame()
+        card_gpu.setStyleSheet(f"QFrame {{ background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 6px; }}")
+        gpu_lay = QVBoxLayout(card_gpu)
+        gpu_lay.setContentsMargins(6, 6, 6, 6)
+        gpu_lay.setSpacing(4)
+        gpu_title = QLabel("◈ GPU")
+        gpu_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        gpu_title.setStyleSheet(f"color: {C.PRI}; background: transparent; border: none;")
+        gpu_lay.addWidget(gpu_title)
+        
+        self._bar_gpu = MetricBar("GPU", C.ACC)
+        gpu_lay.addWidget(self._bar_gpu)
+        gpu_lay.addStretch()
+
+        row2_layout.addWidget(card_net, stretch=1)
+        row2_layout.addWidget(card_gpu, stretch=1)
+        lay.addLayout(row2_layout)
+
+        # Card INFO
+        info_panel = QFrame()
         info_panel.setStyleSheet(
-            f"background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 4px;"
+            f"QFrame {{ background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 6px; }}"
         )
         ip_lay = QVBoxLayout(info_panel)
-        ip_lay.setContentsMargins(6, 5, 6, 5)
-        ip_lay.setSpacing(3)
+        ip_lay.setContentsMargins(8, 6, 8, 6)
+        ip_lay.setSpacing(4)
+
+        info_title = QLabel("◈ SYSTEM INFO")
+        info_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        info_title.setStyleSheet(f"color: {C.PRI}; background: transparent; border: none;")
+        ip_lay.addWidget(info_title)
 
         self._uptime_lbl = QLabel("UP  --:--")
         self._uptime_lbl.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
@@ -2641,7 +2783,55 @@ class MainWindow(QMainWindow):
         ip_lay.addWidget(os_lbl)
 
         lay.addWidget(info_panel)
-        lay.addStretch()
+
+        # Card HERMES PROCESS LOGS
+        hermes_card = QFrame()
+        hermes_card.setStyleSheet(
+            f"QFrame {{ background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 6px; }}"
+        )
+        hermes_lay = QVBoxLayout(hermes_card)
+        hermes_lay.setContentsMargins(6, 6, 6, 6)
+        hermes_lay.setSpacing(4)
+
+        hermes_title = QLabel("◈ HERMES LOGS")
+        hermes_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        hermes_title.setStyleSheet(f"color: {C.PRI}; background: transparent; border: none;")
+        hermes_lay.addWidget(hermes_title)
+
+        self._hermes_task_combo = QComboBox()
+        self._hermes_task_combo.setFont(QFont("Courier New", 8))
+        self._hermes_task_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: #000d14; color: {C.WHITE};
+                border: 1px solid {C.BORDER}; border-radius: 3px; padding: 2px 4px;
+            }}
+            QComboBox::drop-down {{ border: none; }}
+            QComboBox QAbstractItemView {{
+                background-color: #000d14;
+                color: {C.WHITE};
+                selection-background-color: {C.PRI_GHO};
+                selection-color: {C.WHITE};
+                border: 1px solid {C.BORDER};
+            }}
+        """)
+        hermes_lay.addWidget(self._hermes_task_combo)
+
+        self._hermes_log_view = QPlainTextEdit()
+        self._hermes_log_view.setReadOnly(True)
+        self._hermes_log_view.setFont(QFont("Courier New", 7))
+        self._hermes_log_view.setStyleSheet(f"""
+            QPlainTextEdit {{
+                background: #000d14;
+                color: {C.TEXT};
+                border: 1px solid {C.BORDER};
+                border-radius: 3px;
+            }}
+        """)
+        hermes_lay.addWidget(self._hermes_log_view, stretch=1)
+
+        self._hermes_task_combo.currentIndexChanged.connect(self._refresh_hermes_log_view)
+
+        lay.addWidget(hermes_card, stretch=1)
 
         return w
     def _build_right_panel(self) -> QWidget:
