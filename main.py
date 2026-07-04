@@ -1254,6 +1254,71 @@ class JarvisLive:
             
         self.speak(text)
 
+    async def _run_local_hermes_task(self, task_id: str, query: str):
+        print(f"[ALICE] 🔄 SYS: Starting local Hermes task {task_id} for query: {query}")
+        self.ui.write_log(f"SYS: Starting local Hermes task {task_id}")
+        
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'wsl', '/home/alice/.local/bin/hermes', '-z', query,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout_lines = []
+            stderr_lines = []
+            
+            async def read_stdout():
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    line_str = line.decode('utf-8', errors='ignore').strip()
+                    if line_str:
+                        import re
+                        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+                        clean_str = ansi_escape.sub('', line_str)
+                        if clean_str:
+                            print(f"[ALICE] [Local Hermes] {clean_str}")
+                            self.ui.write_log(f"HERMES: {clean_str}")
+                            stdout_lines.append(clean_str)
+                        
+            async def read_stderr():
+                while True:
+                    line = await proc.stderr.readline()
+                    if not line:
+                        break
+                    line_str = line.decode('utf-8', errors='ignore').strip()
+                    if line_str:
+                        import re
+                        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+                        clean_str = ansi_escape.sub('', line_str)
+                        if clean_str:
+                            print(f"[ALICE] [Local Hermes ERR] {clean_str}")
+                            stderr_lines.append(clean_str)
+
+            await asyncio.gather(read_stdout(), read_stderr())
+            return_code = await proc.wait()
+            
+            if return_code == 0:
+                full_output = "\n".join(stdout_lines)
+                print(f"[ALICE] 🔄 HERMES: Local task {task_id} completed.")
+                self.ui.write_log(f"HERMES: Local task {task_id} completed.")
+                if hasattr(self.ui, "show_content"):
+                    self.ui.show_content(f"LOCAL HERMES RESPONSE ({task_id})", full_output)
+                
+                await self.speak_when_ready(f"Sir, local task {task_id} has been completed. Here is the response:\n{full_output}")
+            else:
+                full_err = "\n".join(stderr_lines)
+                print(f"[ALICE] ❌ HERMES: Local task {task_id} failed with exit code {return_code}.")
+                self.ui.write_log(f"HERMES: Local task {task_id} failed.")
+                await self.speak_when_ready(f"Sir, the local task {task_id} has failed: {full_err or 'Exit code ' + str(return_code)}")
+                
+        except Exception as e:
+            print(f"[ALICE] ❌ Exception in local Hermes execution: {e}")
+            self.ui.write_log(f"SYS: Local Hermes task {task_id} exception: {e}")
+            await self.speak_when_ready(f"Sir, I encountered an error running local Hermes task {task_id}: {str(e)}")
+
     async def _poll_hermes_task(self, task_id: str, query: str):
         print(f"[ALICE] 🔄 SYS: Started polling task {task_id} for query: {query}")
         self.ui.write_log(f"SYS: Started polling task {task_id}")
@@ -1460,37 +1525,10 @@ class JarvisLive:
         try:
             if name == "ask_hermes":
                 query = args.get("query")
-                
-                def _call_hermes_sync():
-                    import requests
-                    user_name = "ilham"
-                    try:
-                        with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-                            cfg = json.load(f)
-                            user_name = cfg.get("user_name", "ilham").lower().strip()
-                    except Exception:
-                        pass
-                    try:
-                        res = requests.post(
-                            self.get_server_url("/api/hermes/ask"),
-                            json={"query": query, "user": user_name},
-                            timeout=10
-                        )
-                        if res.status_code == 200:
-                            return res.json()
-                        else:
-                            return {"status": "error", "message": f"Server status code {res.status_code}"}
-                    except Exception as e:
-                        return {"status": "error", "message": str(e)}
-
-                res_data = await loop.run_in_executor(None, _call_hermes_sync)
-                if res_data.get("status") == "queued":
-                    task_id = res_data.get("task_id")
-                    result = f"Task successfully queued on Hermes server. Task ID: {task_id}. I will speak the response once it is ready."
-                    asyncio.create_task(self._poll_hermes_task(task_id, query))
-                else:
-                    msg = res_data.get("message", "Failed to queue task.")
-                    result = f"Failed to submit task to Hermes: {msg}"
+                import uuid
+                task_id = f"local_{uuid.uuid4().hex[:6]}"
+                result = f"Task successfully started locally in WSL. Task ID: {task_id}. I will speak the response once it is complete."
+                asyncio.create_task(self._run_local_hermes_task(task_id, query))
 
             elif name == "open_app":
                 r = await loop.run_in_executor(None, lambda: open_app(parameters=args, response=None, player=self.ui))
