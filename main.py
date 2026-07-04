@@ -1254,9 +1254,105 @@ class JarvisLive:
             
         self.speak(text)
 
+    def _sync_memory_to_hermes(self):
+        try:
+            from memory.memory_manager import load_memory
+            import json
+            import os
+            
+            user_name = "ilham"
+            try:
+                with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                    user_name = cfg.get("user_name", "ilham").lower().strip()
+            except Exception:
+                pass
+                
+            memory = load_memory()
+            facts = []
+            for cat, items in memory.items():
+                if not isinstance(items, dict):
+                    continue
+                for key, entry in items.items():
+                    if isinstance(entry, dict) and "value" in entry:
+                        val = entry.get("value")
+                        if val:
+                            facts.append(f"Category [{cat}] {key}: {val}")
+                    elif isinstance(entry, str) and entry:
+                        facts.append(f"Category [{cat}] {key}: {entry}")
+                        
+            content = "\n§\n".join(facts)
+            
+            home_dir = os.path.expanduser("~")
+            mem_dir = os.path.join(home_dir, ".hermes", "memories")
+            os.makedirs(mem_dir, exist_ok=True)
+            
+            user_suffix = f"_{user_name}" if user_name != "ilham" else ""
+            user_md_path = os.path.join(mem_dir, f"USER{user_suffix}.md")
+            
+            with open(user_md_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            print(f"[Memory] 🔄 Synced {len(facts)} ALICE memory entries to {user_md_path}")
+        except Exception as e:
+            print(f"[Memory] ❌ Failed to sync ALICE memory to Hermes: {e}")
+
+    def _sync_memory_from_hermes(self):
+        try:
+            from memory.memory_manager import update_memory
+            import os
+            import re
+            
+            user_name = "ilham"
+            try:
+                with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                    user_name = cfg.get("user_name", "ilham").lower().strip()
+            except Exception:
+                pass
+                
+            home_dir = os.path.expanduser("~")
+            mem_dir = os.path.join(home_dir, ".hermes", "memories")
+            user_suffix = f"_{user_name}" if user_name != "ilham" else ""
+            user_md_path = os.path.join(mem_dir, f"USER{user_suffix}.md")
+            
+            if not os.path.exists(user_md_path):
+                return
+                
+            with open(user_md_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                
+            facts = [f.strip() for f in content.split("§") if f.strip()]
+            updates = {}
+            for fact in facts:
+                match = re.match(r"^Category\s+\[([^\]]+)\]\s+([^:]+):\s*(.*)$", fact, re.IGNORECASE)
+                if match:
+                    cat = match.group(1).strip()
+                    key = match.group(2).strip()
+                    val = match.group(3).strip()
+                    
+                    if cat not in updates:
+                        updates[cat] = {}
+                    updates[cat][key] = {"value": val}
+                else:
+                    words = [w for w in re.sub(r'[^a-zA-Z0-9\s]', '', fact).split() if w]
+                    if words:
+                        key = "_".join(words[:3]).lower()
+                        if "notes" not in updates:
+                            updates["notes"] = {}
+                        updates["notes"][key] = {"value": fact}
+                        
+            if updates:
+                update_memory(updates)
+                print(f"[Memory] 🔄 Synced memory back from Hermes to ALICE (updated {len(updates)} categories)")
+        except Exception as e:
+            print(f"[Memory] ❌ Failed to sync memory from Hermes to ALICE: {e}")
+
     async def _run_local_hermes_task(self, task_id: str, query: str):
         print(f"[ALICE] 🔄 SYS: Starting local Hermes task {task_id} for query: {query}")
         self.ui.write_log(f"SYS: Starting local Hermes task {task_id}")
+        
+        # Sync ALICE memory to Hermes memories before execution
+        self._sync_memory_to_hermes()
         
         try:
             import os
@@ -1314,6 +1410,9 @@ class JarvisLive:
                 self.ui.write_log(f"HERMES: Local task {task_id} completed.")
                 if hasattr(self.ui, "show_content"):
                     self.ui.show_content(f"LOCAL HERMES RESPONSE ({task_id})", full_output)
+                
+                # Sync memory back from Hermes to ALICE long_term.json
+                self._sync_memory_from_hermes()
                 
                 await self.speak_when_ready(f"Sir, local task {task_id} has been completed. Here is the response:\n{full_output}")
             else:
