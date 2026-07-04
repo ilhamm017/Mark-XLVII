@@ -4,7 +4,7 @@ from pathlib import Path
 import threading
 import json
 import logging
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 import uvicorn
 
@@ -42,7 +42,76 @@ task_handler = TaskFileHandler()
 task_handler.setLevel(logging.DEBUG)
 logging.getLogger().addHandler(task_handler)
 
+# --- Firefox DevTools MCP Bridge Variables ---
+import queue
+firefox_proc = None
+firefox_lock = threading.Lock()
+firefox_stdout_queue = queue.Queue()
+firefox_active_requests = {}
+
+def read_firefox_stdout(p):
+    while True:
+        try:
+            line = p.stdout.readline()
+            if not line:
+                break
+            line_str = line.decode('utf-8', errors='ignore').strip()
+            if line_str:
+                firefox_stdout_queue.put(line_str)
+        except Exception:
+            break
+
+def firefox_dispatcher():
+    while True:
+        try:
+            line = firefox_stdout_queue.get()
+            try:
+                data = json.loads(line)
+                if isinstance(data, dict) and "id" in data:
+                    req_id = data["id"]
+                    if req_id in firefox_active_requests:
+                        firefox_active_requests[req_id].put(data)
+            except Exception:
+                pass
+        except Exception:
+            break
+
+def start_firefox_mcp():
+    global firefox_proc
+    cmd = [
+        r"C:\Users\Administrator\AppData\Roaming\npm\firefox-devtools-mcp.cmd",
+        "--connectExisting",
+        "--marionettePort",
+        "6000"
+    ]
+    try:
+        kwargs = {}
+        import subprocess as sp
+        if os.name == 'nt':
+            kwargs["creationflags"] = sp.CREATE_NO_WINDOW if hasattr(sp, "CREATE_NO_WINDOW") else 0x08000000
+        firefox_proc = sp.Popen(
+            cmd,
+            stdin=sp.PIPE,
+            stdout=sp.PIPE,
+            stderr=sp.PIPE,
+            **kwargs
+        )
+        
+        t1 = threading.Thread(target=read_firefox_stdout, args=(firefox_proc,), daemon=True)
+        t1.start()
+        
+        t2 = threading.Thread(target=firefox_dispatcher, daemon=True)
+        t2.start()
+        
+        print("[Daemon] 🦊 Firefox DevTools MCP bridge started.")
+    except Exception as e:
+        print(f"[Daemon] ❌ Failed to start Firefox DevTools MCP subprocess: {e}")
+
 app = FastAPI()
+
+@app.on_event("startup")
+def startup_event():
+    start_firefox_mcp()
 
 class QueryRequest(BaseModel):
     query: str
@@ -131,8 +200,58 @@ async def handle_query(req: QueryRequest):
     
     return {"status": "started"}
 
+@app.post("/firefox/mcp")
+async def handle_firefox_mcp(request: Request):
+    global firefox_proc
+    
+    if firefox_proc is None or firefox_proc.poll() is not None:
+        print("[Daemon] Firefox MCP process not running. Restarting...")
+        start_firefox_mcp()
+        
+    try:
+        req_body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+        
+    req_id = req_body.get("id")
+    if req_id is None:
+        import uuid
+        req_id = str(uuid.uuid4())
+        req_body["id"] = req_id
+        
+    resp_queue = queue.Queue()
+    firefox_active_requests[req_id] = resp_queue
+    
+    try:
+        with firefox_lock:
+            if firefox_proc and firefox_proc.stdin:
+                payload = json.dumps(req_body) + "\n"
+                firefox_proc.stdin.write(payload.encode('utf-8'))
+                firefox_proc.stdin.flush()
+            else:
+                raise RuntimeError("Firefox MCP process stdin not available")
+                
+        resp_data = resp_queue.get(timeout=30.0)
+        return resp_data
+    except Exception as e:
+        return {
+            "jsonrpc": "2.0",
+            "error": {"code": -32603, "message": f"Bridge error: {str(e)}"},
+            "id": req_id
+        }
+    finally:
+        firefox_active_requests.pop(req_id, None)
+
 @app.post("/shutdown")
 async def shutdown():
+    global firefox_proc
+    if firefox_proc:
+        try:
+            firefox_proc.terminate()
+            firefox_proc.wait(timeout=2)
+        except Exception:
+            pass
+            
     def stop_server():
         import time
         time.sleep(0.5)
