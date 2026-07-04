@@ -1238,6 +1238,40 @@ class SettingsWindow(QDialog):
         sep.setStyleSheet(f"color: {C.BORDER};")
         layout.addWidget(sep)
 
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{
+                background: transparent;
+                border: none;
+            }}
+            QScrollBar:vertical {{
+                border: none;
+                background: #000a0f;
+                width: 8px;
+                margin: 0px;
+                border-radius: 4px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {C.PRI_DIM};
+                min-height: 20px;
+                border-radius: 4px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                border: none;
+                background: none;
+            }}
+        """)
+
+        scroll_widget = QWidget()
+        scroll_widget.setStyleSheet("background: transparent;")
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setContentsMargins(0, 0, 10, 0)
+        scroll_layout.setSpacing(10)
+
         form = QFormLayout()
         form.setContentsMargins(0, 5, 0, 5)
         form.setSpacing(8)
@@ -1356,6 +1390,20 @@ class SettingsWindow(QDialog):
         self.sub2api_key_input.setPlaceholderText("API key for sub2api proxy")
         form.addRow("Sub2API Auth Key:", self.sub2api_key_input)
 
+        form.addRow(_sec_lbl("◈ HONCHO MEMORY SERVER"))
+
+        self.honcho_url_input = QLineEdit()
+        self.honcho_url_input.setPlaceholderText("http://192.168.0.102:8000")
+        form.addRow("Honcho Base URL:", self.honcho_url_input)
+
+        self.honcho_peer_input = QLineEdit()
+        self.honcho_peer_input.setPlaceholderText("760143518")
+        form.addRow("Honcho Peer ID:", self.honcho_peer_input)
+
+        self.honcho_workspace_input = QLineEdit()
+        self.honcho_workspace_input.setPlaceholderText("hermes")
+        form.addRow("Honcho Workspace:", self.honcho_workspace_input)
+
         form.addRow(_sec_lbl("◈ MODEL CONTEXT PROTOCOL (MCP) SERVERS"))
 
         self.mcp_browseros_cb = QCheckBox("Enable BrowserOS MCP")
@@ -1376,7 +1424,9 @@ class SettingsWindow(QDialog):
         form.addRow(self.mcp_custom_cb, self.custom_url_input)
         self.mcp_custom_cb.toggled.connect(self.custom_url_input.setEnabled)
 
-        layout.addLayout(form)
+        scroll_layout.addLayout(form)
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll)
 
         self._load_current_values()
 
@@ -1473,6 +1523,9 @@ class SettingsWindow(QDialog):
         self.api_key_input.setText(cfg.get("gemini_api_key", ""))
         self.sub2api_url_input.setText(cfg.get("sub2api_base_url", "https://sub2api.randompulse.my.id/antigravity"))
         self.sub2api_key_input.setText(cfg.get("sub2api_key", ""))
+        self.honcho_url_input.setText(cfg.get("honcho_base_url", "http://192.168.0.102:8000"))
+        self.honcho_peer_input.setText(cfg.get("honcho_peer_name", "760143518"))
+        self.honcho_workspace_input.setText(cfg.get("honcho_workspace", "hermes"))
 
         self.mcp_browseros_cb.setChecked(cfg.get("mcp_enabled_browseros", True))
         self.browseros_url_input.setText(cfg.get("browseros_mcp_url", "http://127.0.0.1:9200/mcp"))
@@ -1512,6 +1565,9 @@ class SettingsWindow(QDialog):
         cfg["gemini_api_key"] = self.api_key_input.text().strip()
         cfg["sub2api_base_url"] = self.sub2api_url_input.text().strip()
         cfg["sub2api_key"] = self.sub2api_key_input.text().strip()
+        cfg["honcho_base_url"] = self.honcho_url_input.text().strip()
+        cfg["honcho_peer_name"] = self.honcho_peer_input.text().strip()
+        cfg["honcho_workspace"] = self.honcho_workspace_input.text().strip()
 
         cfg["mcp_enabled_browseros"] = self.mcp_browseros_cb.isChecked()
         cfg["browseros_mcp_url"] = self.browseros_url_input.text().strip()

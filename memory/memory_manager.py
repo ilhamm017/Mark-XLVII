@@ -31,6 +31,18 @@ def get_user_name() -> str:
     return user_name
 
 def get_honcho_peer_id() -> str:
+    try:
+        base_dir = get_base_dir()
+        config_path = base_dir / "config" / "api_keys.json"
+        if config_path.exists():
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                val = cfg.get("honcho_peer_name")
+                if val:
+                    return str(val).strip()
+    except Exception:
+        pass
+
     # Try HERMES_HOME env var
     hermes_home = os.environ.get("HERMES_HOME")
     if hermes_home:
@@ -75,6 +87,18 @@ def get_honcho_peer_id() -> str:
     return "760143518"
 
 def get_honcho_url() -> str:
+    try:
+        base_dir = get_base_dir()
+        config_path = base_dir / "config" / "api_keys.json"
+        if config_path.exists():
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                val = cfg.get("honcho_base_url")
+                if val:
+                    return str(val).strip().rstrip("/")
+    except Exception:
+        pass
+
     base_url = "http://192.168.0.102:8000"
     
     paths_to_check = []
@@ -136,6 +160,20 @@ def get_honcho_url() -> str:
         
     return base_url
 
+def get_honcho_workspace() -> str:
+    try:
+        base_dir = get_base_dir()
+        config_path = base_dir / "config" / "api_keys.json"
+        if config_path.exists():
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                val = cfg.get("honcho_workspace")
+                if val:
+                    return str(val).strip()
+    except Exception:
+        pass
+    return "hermes"
+
 def _empty_memory() -> dict:
     return {
         "identity":      {},
@@ -149,7 +187,7 @@ def _empty_memory() -> dict:
 def load_memory() -> dict:
     base_url = get_honcho_url()
     peer_id = get_honcho_peer_id()
-    workspace = "hermes"
+    workspace = get_honcho_workspace()
     
     data = _empty_memory()
     
@@ -226,7 +264,7 @@ def save_memory(memory: dict) -> None:
                 
     base_url = get_honcho_url()
     peer_id = get_honcho_peer_id()
-    workspace = "hermes"
+    workspace = get_honcho_workspace()
     
     with _lock:
         try:
