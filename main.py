@@ -1936,6 +1936,27 @@ class JarvisLive:
                     "system_status", "shutdown_alice", "save_memory", "system_control", "hermes_tools"
                 }
                 if name not in builtins:
+                    # If tool is not in any registered list, try refreshing lists dynamically
+                    if (name not in self.vscode_tool_names and 
+                        name not in self.browseros_tool_names and 
+                        name not in self.custom_tool_names):
+                        print(f"[ALICE] Tool '{name}' not found in registered lists. Refreshing MCP tools...")
+                        try:
+                            vscode_tools = await fetch_vscode_mcp_tools()
+                            self.vscode_tool_names = {t["name"] for t in vscode_tools}
+                        except Exception as e:
+                            print(f"[ALICE] Failed to refresh VS Code tools: {e}")
+                        try:
+                            browser_tools = await fetch_browseros_mcp_tools()
+                            self.browseros_tool_names = {t["name"] for t in browser_tools}
+                        except Exception as e:
+                            print(f"[ALICE] Failed to refresh BrowserOS tools: {e}")
+                        try:
+                            custom_tools = await fetch_custom_mcp_tools()
+                            self.custom_tool_names = {t["name"] for t in custom_tools}
+                        except Exception as e:
+                            print(f"[ALICE] Failed to refresh Custom tools: {e}")
+
                     if name in self.vscode_tool_names:
                         print(f"[ALICE] Forwarding {name} call to VS Code MCP server...")
                         mcp_res = await call_vscode_mcp_tool(name, args)
@@ -1946,12 +1967,27 @@ class JarvisLive:
                         print(f"[ALICE] Forwarding {name} call to BrowserOS MCP server...")
                         mcp_res = await call_browseros_mcp_tool(name, args)
                     else:
-                        if name.endswith("_code"):
+                        # Smarter heuristic fallbacks based on name keywords
+                        vscode_keywords = {"editor", "vscode", "terminal", "file", "directory", "grep", "insert", "replace", "execute_command"}
+                        browseros_keywords = {"tab", "navigate", "screenshot", "pdf", "click", "type", "hover", "scroll", "download", "upload"}
+                        
+                        is_vscode = name.endswith("_code") or any(kw in name.lower() for kw in vscode_keywords)
+                        is_browser = any(kw in name.lower() for kw in browseros_keywords)
+                        
+                        if is_vscode and not is_browser:
                             print(f"[ALICE] Heuristic: Forwarding {name} call to VS Code MCP server...")
                             mcp_res = await call_vscode_mcp_tool(name, args)
-                        else:
+                        elif is_browser and not is_vscode:
                             print(f"[ALICE] Heuristic: Forwarding {name} call to BrowserOS MCP server...")
                             mcp_res = await call_browseros_mcp_tool(name, args)
+                        else:
+                            # Default fallback
+                            if name.endswith("_code"):
+                                print(f"[ALICE] Heuristic: Forwarding {name} call to VS Code MCP server...")
+                                mcp_res = await call_vscode_mcp_tool(name, args)
+                            else:
+                                print(f"[ALICE] Heuristic: Forwarding {name} call to BrowserOS MCP server...")
+                                mcp_res = await call_browseros_mcp_tool(name, args)
                     result = mcp_res
                 else:
                     result = f"Unknown tool: {name}"
@@ -2581,6 +2617,38 @@ class JarvisLive:
 
                 print(f"[ALICE] Connecting to {live_model}...")
                 self.ui.set_state("THINKING")
+
+                # Dynamic parallel fetch of MCP tools upon each connection attempt
+                try:
+                    results = await asyncio.gather(
+                        fetch_browseros_mcp_tools(),
+                        fetch_vscode_mcp_tools(),
+                        fetch_custom_mcp_tools(),
+                        return_exceptions=True
+                    )
+                    
+                    self.mcp_tools = []
+                    
+                    browser_tools = results[0] if not isinstance(results[0], Exception) else []
+                    self.mcp_tools.extend(browser_tools)
+                    self.browseros_tool_names = {t["name"] for t in browser_tools}
+                    if isinstance(results[0], Exception):
+                        print(f"[ALICE] Failed fetching BrowserOS MCP tools: {results[0]}")
+                        
+                    vscode_tools = results[1] if not isinstance(results[1], Exception) else []
+                    self.mcp_tools.extend(vscode_tools)
+                    self.vscode_tool_names = {t["name"] for t in vscode_tools}
+                    if isinstance(results[1], Exception):
+                        print(f"[ALICE] Failed fetching VS Code MCP tools: {results[1]}")
+                        
+                    custom_tools = results[2] if not isinstance(results[2], Exception) else []
+                    self.mcp_tools.extend(custom_tools)
+                    self.custom_tool_names = {t["name"] for t in custom_tools}
+                    if isinstance(results[2], Exception):
+                        print(f"[ALICE] Failed fetching Custom MCP tools: {results[2]}")
+                except Exception as mcp_err:
+                    print(f"[ALICE] Error in dynamic MCP gather on connection: {mcp_err}")
+
                 config = self._build_config()
 
                 async with (

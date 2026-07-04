@@ -492,7 +492,7 @@ def _call_browseros_mcp(tool_name: str, args: dict = None) -> dict:
 def _get_active_page_id() -> int:
     """Returns the active page ID from BrowserOS, or 0 if none."""
     try:
-        result = _call_browseros_mcp("list_pages")
+        result = _call_browseros_mcp("tabs", {"action": "list"})
         sc = result.get("structuredContent") or {}
         pages = sc.get("pages") or result.get("pages") or []
         if not pages:
@@ -503,10 +503,17 @@ def _get_active_page_id() -> int:
                     pages = sc2.get("pages", [])
                     break
         if pages:
-            for p in pages:
-                if p.get("isActive"):
-                    return int(p["pageId"])
-            return int(pages[0]["pageId"])
+            try:
+                import win32gui
+                hwnd = win32gui.GetForegroundWindow()
+                win_title = win32gui.GetWindowText(hwnd).lower()
+                for p in pages:
+                    p_title = p.get("title", "").lower()
+                    if p_title and (p_title in win_title or win_title in p_title):
+                        return int(p.get("page") or p.get("pageId") or 0)
+            except Exception:
+                pass
+            return int(pages[0].get("page") or pages[0].get("pageId") or 0)
     except Exception:
         pass
     return 0
