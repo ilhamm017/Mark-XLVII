@@ -1316,10 +1316,10 @@ def browser_control(
     # Determine if BrowserOS MCP should be used
     use_mcp = False
     if action not in ("close",):
-        if _is_browseros_running():
-            use_mcp = True
-        elif not browser or browser in ("browseros", ""):
-            if launch_browseros():
+        if not browser or browser in ("browseros", ""):
+            if _is_browseros_running():
+                use_mcp = True
+            elif launch_browseros():
                 use_mcp = True
 
     if use_mcp:
