@@ -2016,7 +2016,20 @@ class JarvisLive:
                 print("[ALICE] 🎤 Opening mic stream...")
                 loop.call_soon_threadsafe(self.ui.set_mic_active, True)
                 try:
+                    mic_device_name = _load_config_value("mic_device_name", None)
+                    mic_device_idx = None
+                    if mic_device_name:
+                        try:
+                            devices = sd.query_devices()
+                            for idx, dev in enumerate(devices):
+                                if dev['max_input_channels'] > 0 and dev['name'] == mic_device_name:
+                                    mic_device_idx = idx
+                                    break
+                        except Exception as e:
+                            print(f"[ALICE] Error resolving input device: {e}")
+
                     with sd.InputStream(
+                        device=mic_device_idx,
                         samplerate=SEND_SAMPLE_RATE,
                         channels=CHANNELS,
                         dtype="int16",
@@ -2158,7 +2171,20 @@ class JarvisLive:
                 self.set_speaking(True)
                 if stream is None:
                     try:
+                        spk_device_name = _load_config_value("spk_device_name", None)
+                        spk_device_idx = None
+                        if spk_device_name:
+                            try:
+                                devices = sd.query_devices()
+                                for idx, dev in enumerate(devices):
+                                    if dev['max_output_channels'] > 0 and dev['name'] == spk_device_name:
+                                        spk_device_idx = idx
+                                        break
+                            except Exception as e:
+                                print(f"[ALICE] Error resolving output device: {e}")
+
                         stream = sd.RawOutputStream(
+                            device=spk_device_idx,
                             samplerate=RECEIVE_SAMPLE_RATE,
                             channels=CHANNELS,
                             dtype="int16",

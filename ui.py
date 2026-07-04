@@ -1277,6 +1277,71 @@ class SettingsWindow(QDialog):
         """)
         form.addRow("Live Voice:", self.voice_name_input)
 
+        form.addRow(_sec_lbl("◈ AUDIO DEVICES (INPUT & OUTPUT)"))
+        
+        self.mic_input_combo = QComboBox()
+        self.mic_input_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: #000d12;
+                color: {C.TEXT};
+                border: 1px solid {C.BORDER};
+                border-radius: 3px;
+                padding: 4px 6px;
+                font-family: 'Courier New';
+                font-size: 11px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: #000d12;
+                color: {C.TEXT};
+                selection-background-color: {C.PRI_DIM};
+                selection-color: {C.TEXT};
+                border: 1px solid {C.BORDER};
+            }}
+        """)
+        
+        self.spk_output_combo = QComboBox()
+        self.spk_output_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: #000d12;
+                color: {C.TEXT};
+                border: 1px solid {C.BORDER};
+                border-radius: 3px;
+                padding: 4px 6px;
+                font-family: 'Courier New';
+                font-size: 11px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: #000d12;
+                color: {C.TEXT};
+                selection-background-color: {C.PRI_DIM};
+                selection-color: {C.TEXT};
+                border: 1px solid {C.BORDER};
+            }}
+        """)
+        
+        try:
+            import sounddevice as sd
+            devices = sd.query_devices()
+            self.mic_input_combo.addItem("Default System Microphone")
+            self.spk_output_combo.addItem("Default System Speaker")
+            seen_inputs = set()
+            seen_outputs = set()
+            for dev in devices:
+                name_str = dev['name']
+                if dev['max_input_channels'] > 0 and name_str not in seen_inputs:
+                    self.mic_input_combo.addItem(name_str)
+                    seen_inputs.add(name_str)
+                if dev['max_output_channels'] > 0 and name_str not in seen_outputs:
+                    self.spk_output_combo.addItem(name_str)
+                    seen_outputs.add(name_str)
+        except Exception as e:
+            print(f"[Settings] Error querying audio devices: {{e}}")
+            self.mic_input_combo.addItem("Default System Microphone")
+            self.spk_output_combo.addItem("Default System Speaker")
+            
+        form.addRow("Microphone Input:", self.mic_input_combo)
+        form.addRow("Speaker Output:", self.spk_output_combo)
+
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key_input.setPlaceholderText("AIzaSy...")
@@ -1384,6 +1449,27 @@ class SettingsWindow(QDialog):
         idx = self.voice_name_input.findText(voice)
         if idx >= 0:
             self.voice_name_input.setCurrentIndex(idx)
+
+        selected_mic = cfg.get("mic_device_name", None)
+        if selected_mic:
+            idx_mic = self.mic_input_combo.findText(selected_mic)
+            if idx_mic >= 0:
+                self.mic_input_combo.setCurrentIndex(idx_mic)
+            else:
+                self.mic_input_combo.setCurrentIndex(0)
+        else:
+            self.mic_input_combo.setCurrentIndex(0)
+
+        selected_spk = cfg.get("spk_device_name", None)
+        if selected_spk:
+            idx_spk = self.spk_output_combo.findText(selected_spk)
+            if idx_spk >= 0:
+                self.spk_output_combo.setCurrentIndex(idx_spk)
+            else:
+                self.spk_output_combo.setCurrentIndex(0)
+        else:
+            self.spk_output_combo.setCurrentIndex(0)
+
         self.api_key_input.setText(cfg.get("gemini_api_key", ""))
         self.sub2api_url_input.setText(cfg.get("sub2api_base_url", "https://sub2api.randompulse.my.id/antigravity"))
         self.sub2api_key_input.setText(cfg.get("sub2api_key", ""))
@@ -1410,6 +1496,19 @@ class SettingsWindow(QDialog):
 
         cfg["live_model"] = self.live_model_input.text().strip()
         cfg["voice_name"] = self.voice_name_input.currentText()
+
+        selected_mic_text = self.mic_input_combo.currentText()
+        if selected_mic_text == "Default System Microphone":
+            cfg["mic_device_name"] = None
+        else:
+            cfg["mic_device_name"] = selected_mic_text
+
+        selected_spk_text = self.spk_output_combo.currentText()
+        if selected_spk_text == "Default System Speaker":
+            cfg["spk_device_name"] = None
+        else:
+            cfg["spk_device_name"] = selected_spk_text
+
         cfg["gemini_api_key"] = self.api_key_input.text().strip()
         cfg["sub2api_base_url"] = self.sub2api_url_input.text().strip()
         cfg["sub2api_key"] = self.sub2api_key_input.text().strip()
