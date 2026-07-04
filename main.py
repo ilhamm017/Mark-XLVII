@@ -2572,6 +2572,9 @@ class JarvisLive:
         self._wake_event = asyncio.Event()
         self._wake_event.set()
 
+        # Start Hermes Daemon first so Custom MCP can fetch tools from it
+        await self._start_hermes_daemon()
+
         # Fetch BrowserOS, VS Code, and Custom MCP tools on startup
         self.mcp_tools = []
         try:
@@ -2617,9 +2620,6 @@ class JarvisLive:
         except Exception as e:
             print(f"[Dashboard] Disabled: {e}")
             self._dashboard = None
-
-        # Start Hermes Daemon
-        await self._start_hermes_daemon()
 
         while True:
             try:
