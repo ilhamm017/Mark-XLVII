@@ -1259,8 +1259,16 @@ class JarvisLive:
         self.ui.write_log(f"SYS: Starting local Hermes task {task_id}")
         
         try:
+            import os
+            import sys
+            scripts_dir = os.path.dirname(sys.executable)
+            hermes_path = os.path.join(scripts_dir, 'hermes.exe')
+            if not os.path.exists(hermes_path):
+                hermes_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'venv', 'Scripts', 'hermes.exe'))
+            
+            print(f"[ALICE] Using local Hermes path: {hermes_path}")
             proc = await asyncio.create_subprocess_exec(
-                'wsl', '/home/alice/.local/bin/hermes', '-z', query,
+                hermes_path, '-z', query,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
