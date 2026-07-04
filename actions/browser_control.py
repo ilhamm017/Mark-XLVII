@@ -404,7 +404,7 @@ def launch_browseros() -> bool:
             if os.path.exists(lnk_path):
                 os.startfile(lnk_path)
             elif os.path.exists(exe_path):
-                subprocess.Popen([exe_path, "--startup-foreground-launch"], shell=True)
+                subprocess.Popen([exe_path, "--startup-foreground-launch"], shell=True, creationflags=0x08000000)
             else:
                 print("[BrowserOS] ❌ BrowserOS executable not found.")
                 return False

@@ -259,6 +259,7 @@ def _focus_window(title: str) -> str:
             subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
                 capture_output=True, timeout=5,
+                creationflags=0x08000000
             )
             time.sleep(0.3)
             return f"Focused window: {title}"

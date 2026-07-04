@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 _OS = platform.system() # "Windows", "Darwin", "Linux"
+_SUBPROCESS_FLAGS = 0x08000000 if _OS == "Windows" else 0
 
 def execute_command(command: str) -> str:
     """Runs a terminal/shell command locally with a 30s timeout."""
@@ -24,7 +25,8 @@ def execute_command(command: str) -> str:
             text=True,
             timeout=30,
             encoding="utf-8",
-            errors="ignore"
+            errors="ignore",
+            creationflags=_SUBPROCESS_FLAGS
         )
         out = res.stdout.strip()
         err = res.stderr.strip()
@@ -169,7 +171,8 @@ def show_notification(title: str, message: str) -> str:
         subprocess.Popen(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps_script],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.DEVNULL,
+            creationflags=_SUBPROCESS_FLAGS
         )
         return "Notification sent to Windows System Tray."
     elif _OS == "Linux":

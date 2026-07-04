@@ -3,7 +3,10 @@ import sys
 import json
 import re
 import time
+import platform
 from pathlib import Path
+
+_SUBPROCESS_FLAGS = 0x08000000 if platform.system() == "Windows" else 0
 
 
 def get_base_dir():
@@ -212,7 +215,8 @@ def _run_file(path: Path, args: list, timeout: int) -> str:
             interp + [str(path)] + (args or []),
             capture_output=True, text=True,
             encoding="utf-8", errors="replace",
-            timeout=timeout, cwd=str(path.parent)
+            timeout=timeout, cwd=str(path.parent),
+            creationflags=_SUBPROCESS_FLAGS
         )
         output = result.stdout.strip()
         error  = result.stderr.strip()

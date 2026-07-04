@@ -12,6 +12,8 @@ import subprocess
 import sys
 from typing import Callable
 
+_SUBPROCESS_FLAGS = 0x08000000 if platform.system() == "Windows" else 0
+
 # ── Package lists ─────────────────────────────────────────────────────────
 # Each entry: (import_name, pip_package_name)
 
@@ -74,6 +76,7 @@ def _pip(package: str, log: Callable | None = None) -> bool:
             "--quiet", "--disable-pip-version-check",
         ],
         capture_output=True,
+        creationflags=_SUBPROCESS_FLAGS
     )
     ok = result.returncode == 0
     if not ok and log:
@@ -130,6 +133,7 @@ def install_for_config(config: dict, log: Callable | None = None) -> None:
         subprocess.run(
             [sys.executable, "-m", "playwright", "install", "chromium"],
             capture_output=True,
+            creationflags=_SUBPROCESS_FLAGS
         )
         if log:
             log("SYS: Playwright browser ready.")

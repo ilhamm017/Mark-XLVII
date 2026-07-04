@@ -179,10 +179,13 @@ def _import_kokoro_pipeline():
         # ── Version mismatch: upgrade kokoro silently and retry ──────────
         print("[TTS] Kokoro/transformers version mismatch detected — upgrading kokoro…")
         import subprocess
+        import platform
+        _flags = 0x08000000 if platform.system() == "Windows" else 0
         result = subprocess.run(
             [sys.executable, "-m", "pip", "install", "kokoro>=0.9",
              "--upgrade", "--quiet", "--disable-pip-version-check"],
             capture_output=True,
+            creationflags=_flags
         )
         if result.returncode != 0:
             stderr = result.stderr.decode(errors="replace").strip()

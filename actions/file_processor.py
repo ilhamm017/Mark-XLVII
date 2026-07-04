@@ -22,8 +22,11 @@ import json
 import shutil
 import subprocess
 import tempfile
+import platform
 from pathlib import Path
 from datetime import datetime
+
+_SUBPROCESS_FLAGS = 0x08000000 if platform.system() == "Windows" else 0
 
 def _get_api_key() -> str:
     config_path = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
@@ -462,7 +465,8 @@ def _process_code(path: Path, action: str, params: dict, speak=None) -> str:
             try:
                 result = subprocess.run(
                     ["python", str(path)],
-                    capture_output=True, text=True, timeout=30
+                    capture_output=True, text=True, timeout=30,
+                    creationflags=_SUBPROCESS_FLAGS
                 )
                 out = result.stdout or result.stderr
                 return f"Output:\n{out[:2000]}" if out else "No output."
@@ -587,7 +591,7 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
 
     def _ffmpeg_available() -> bool:
         try:
-            subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=3)
+            subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=3, creationflags=_SUBPROCESS_FLAGS)
             return True
         except Exception:
             return False
@@ -597,7 +601,8 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
             result = subprocess.run(
                 ["ffprobe", "-v", "quiet", "-print_format", "json",
                  "-show_format", "-show_streams", str(path)],
-                capture_output=True, text=True, timeout=10
+                capture_output=True, text=True, timeout=10,
+                creationflags=_SUBPROCESS_FLAGS
             )
             data     = json.loads(result.stdout)
             fmt      = data.get("format", {})
@@ -620,7 +625,8 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
         try:
             subprocess.run(
                 ["ffmpeg", "-i", str(path), "-q:a", "0", "-map", "a", str(out), "-y"],
-                capture_output=True, timeout=300
+                capture_output=True, timeout=300,
+                creationflags=_SUBPROCESS_FLAGS
             )
             return f"Audio extracted. Saved: {out.name}"
         except Exception as e:
@@ -637,7 +643,7 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
             if end:
                 cmd += ["-to", str(end)]
             cmd += ["-c", "copy", str(out), "-y"]
-            subprocess.run(cmd, capture_output=True, timeout=600)
+            subprocess.run(cmd, capture_output=True, timeout=600, creationflags=_SUBPROCESS_FLAGS)
             return f"Trimmed video saved: {out.name}"
         except Exception as e:
             return f"Trim failed: {e}"
@@ -651,7 +657,8 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
             subprocess.run(
                 ["ffmpeg", "-i", str(path), "-ss", timestamp,
                  "-vframes", "1", str(out), "-y"],
-                capture_output=True, timeout=30
+                capture_output=True, timeout=30,
+                creationflags=_SUBPROCESS_FLAGS
             )
             return f"Frame extracted at {timestamp}. Saved: {out.name}"
         except Exception as e:
@@ -668,7 +675,8 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
                  "-c:v", "libx264", "-crf", str(crf),
                  "-preset", "medium", "-c:a", "copy",
                  str(out), "-y"],
-                capture_output=True, timeout=1800
+                capture_output=True, timeout=1800,
+                creationflags=_SUBPROCESS_FLAGS
             )
             before = _file_size_str(path)
             after  = _file_size_str(out)
@@ -684,7 +692,8 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
             subprocess.run(
                 ["ffmpeg", "-i", str(path), "-q:a", "0", "-map", "a",
                  str(tmp_audio), "-y"],
-                capture_output=True, timeout=300
+                capture_output=True, timeout=300,
+                creationflags=_SUBPROCESS_FLAGS
             )
             result = _process_audio(tmp_audio, "transcribe", params, speak)
             return result
@@ -702,7 +711,8 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
         try:
             subprocess.run(
                 ["ffmpeg", "-i", str(path), str(out), "-y"],
-                capture_output=True, timeout=1800
+                capture_output=True, timeout=1800,
+                creationflags=_SUBPROCESS_FLAGS
             )
             return f"Converted to {fmt.upper()}. Saved: {out.name}"
         except Exception as e:
