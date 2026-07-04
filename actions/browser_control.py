@@ -1311,8 +1311,43 @@ def _call_firefox_mcp(tool_name: str, args: dict = None) -> dict:
         raise RuntimeError(f"Firefox MCP call '{tool_name}' failed: {e}") from e
 
 
+def _ensure_firefox_running():
+    import socket
+    import time
+    
+    is_listening = False
+    try:
+        with socket.create_connection(("127.0.0.1", 6000), timeout=0.5):
+            is_listening = True
+    except Exception:
+        pass
+        
+    if not is_listening:
+        print("[Browser] Firefox marionette port 6000 is not listening. Restarting Firefox...")
+        import subprocess
+        import platform
+        if platform.system() == "Windows":
+            subprocess.run("taskkill /F /IM firefox.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.run("pkill -f firefox", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+        from actions.open_app import open_app
+        open_app({"app_name": "firefox"})
+        
+        # Wait up to 10 seconds for the port to start listening
+        for _ in range(50):
+            try:
+                with socket.create_connection(("127.0.0.1", 6000), timeout=0.1):
+                    print("[Browser] Firefox marionette is now listening on port 6000.")
+                    break
+            except Exception:
+                time.sleep(0.2)
+
+
 def _run_via_firefox_mcp(action: str, params: dict) -> str | None:
     from urllib.parse import quote
+    
+    _ensure_firefox_running()
 
     def call_mcp_checked(tool_name: str, args: dict = None) -> dict:
         res = _call_firefox_mcp(tool_name, args)

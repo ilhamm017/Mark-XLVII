@@ -804,7 +804,7 @@ def open_app(
                                         
                     if default_path:
                         user_js = default_path / "user.js"
-                        content = 'user_pref("marionette.port", 6000);\nuser_pref("marionette.enabled", true);\n'
+                        content = 'user_pref("marionette.port", 6000);\nuser_pref("marionette.enabled", true);\nuser_pref("remote.active-protocols", 3);\nuser_pref("remote.enabled", true);\n'
                         user_js.write_text(content, encoding="utf-8")
                         print(f"[open_app] Wrote user.js to {user_js}")
             
