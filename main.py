@@ -1600,17 +1600,36 @@ class JarvisLive:
             pass
             
         try:
+            logs_dir = os.path.join(project_dir, ".hermes", "logs")
+            os.makedirs(logs_dir, exist_ok=True)
+            daemon_log_path = os.path.join(logs_dir, "daemon.log")
+            
             kwargs = {}
             if platform.system() == "Windows":
                 kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                
+            daemon_log_file = open(daemon_log_path, "a", encoding="utf-8")
 
             self._hermes_daemon_proc = await asyncio.create_subprocess_exec(
                 sys.executable, daemon_path,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                stdout=daemon_log_file,
+                stderr=daemon_log_file,
                 **kwargs
             )
-            print("[ALICE] 🔄 Hermes Daemon started successfully on port 8085.")
+            
+            # Wait up to 5 seconds for the daemon to become responsive
+            for _ in range(10):
+                try:
+                    async with httpx.AsyncClient() as client:
+                        r = await client.get("http://127.0.0.1:8085/docs", timeout=0.5)
+                        if r.status_code == 200:
+                            print("[ALICE] 🔄 Hermes Daemon is online and healthy.")
+                            break
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+            else:
+                print("[ALICE] ⚠️ Warning: Hermes Daemon took too long to respond.")
         except Exception as e:
             print(f"[ALICE] ❌ Failed to start Hermes Daemon: {e}")
 
@@ -2600,7 +2619,7 @@ class JarvisLive:
             self._dashboard = None
 
         # Start Hermes Daemon
-        asyncio.create_task(self._start_hermes_daemon())
+        await self._start_hermes_daemon()
 
         while True:
             try:
