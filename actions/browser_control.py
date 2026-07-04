@@ -440,7 +440,19 @@ def launch_browseros() -> bool:
         return False
 
 
-_MCP_URL = "http://127.0.0.1:9000/mcp"
+def _get_browseros_mcp_url() -> str:
+    try:
+        base_dir = Path(__file__).resolve().parent.parent
+        config_path = base_dir / "config" / "api_keys.json"
+        if config_path.exists():
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                url = cfg.get("browseros_mcp_url")
+                if url:
+                    return url
+    except Exception:
+        pass
+    return "http://127.0.0.1:9200/mcp"
 
 
 def _call_browseros_mcp(tool_name: str, args: dict = None) -> dict:
@@ -463,10 +475,11 @@ def _call_browseros_mcp(tool_name: str, args: dict = None) -> dict:
     }
     headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
     try:
+        mcp_url = _get_browseros_mcp_url()
         with httpx.Client(timeout=5.0) as client:
-            client.post(_MCP_URL, json=init_payload, headers=headers)
+            client.post(mcp_url, json=init_payload, headers=headers)
         with httpx.Client(timeout=30.0) as client:
-            resp = client.post(_MCP_URL, json=payload, headers=headers)
+            resp = client.post(mcp_url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
             if "error" in data:

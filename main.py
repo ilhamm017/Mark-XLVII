@@ -1883,6 +1883,8 @@ class JarvisLive:
         try:
             while True:
                 async for response in self.session.receive():
+                    import time
+                    self._last_activity_time = time.time()
 
                     if response.data:
                         if self._turn_done_event and self._turn_done_event.is_set():
@@ -2362,6 +2364,10 @@ class JarvisLive:
                     self.out_queue        = asyncio.Queue(maxsize=200)
                     self._turn_done_event = asyncio.Event()
                     self._turn_count      = 0
+
+                    import time
+                    self._last_activity_time = time.time()
+                    self._last_voice_time = 0.0
 
                     print("[ALICE] Connected.")
                     self.ui.set_state("LISTENING")
