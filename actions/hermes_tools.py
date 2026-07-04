@@ -104,7 +104,7 @@ def patch_file(path: str, old_string: str, new_string: str, replace_all: bool = 
         return f"Error patching file: {e}"
 
 def search_file_content(pattern: str, target: str = "content", path: str = ".", file_glob: str = None, limit: int = 50) -> str:
-    """Searches file names or file contents in a directory."""
+    """Searches file names or file contents in a directory with directory pruning."""
     try:
         search_path = _resolve_path(path)
         if not _is_safe_path(search_path):
@@ -115,39 +115,69 @@ def search_file_content(pattern: str, target: str = "content", path: str = ".", 
         results = []
         target = target.lower().strip()
         
+        skip_dirs = {
+            'appdata', 'application data', 'local settings', 'node_modules', 
+            'venv', '.git', '.cache', '__pycache__', 'temp', 'recycle.bin', 
+            'cookies', 'nethood', 'printhood', 'recent', 'sendto', 'start menu', 
+            'templates', '$recycle.bin', 'system volume information'
+        }
+        
+        import fnmatch
+        
         if target == "files":
             search_terms = re.split(r'[-_\s]+', pattern.lower().strip())
-            for p in search_path.rglob("*"):
-                if p.is_file():
-                    p_name_lower = p.name.lower()
-                    if all(term in p_name_lower for term in search_terms if term):
-                        if file_glob and not fnmatch.fnmatch(p.name, file_glob):
-                            continue
-                        size = p.stat().st_size
-                        results.append(f"📄 {p.relative_to(search_path)} ({size} bytes)")
-                        if len(results) >= limit:
-                            break
+            try:
+                for root, dirs, files in os.walk(search_path, topdown=True):
+                    # Prune in-place
+                    dirs[:] = [d for d in dirs if d.lower() not in skip_dirs and not d.startswith('.')]
+                    
+                    for f in files:
+                        f_lower = f.lower()
+                        if all(term in f_lower for term in search_terms if term):
+                            if file_glob and not fnmatch.fnmatch(f, file_glob):
+                                continue
+                            full_path = Path(root) / f
+                            try:
+                                size = full_path.stat().st_size
+                                results.append(f"📄 {full_path.relative_to(search_path)} ({size} bytes)")
+                            except Exception:
+                                results.append(f"📄 {full_path.relative_to(search_path)}")
+                            if len(results) >= limit:
+                                break
+                    if len(results) >= limit:
+                        break
+            except Exception as walk_err:
+                print(f"[hermes_tools] search files error: {walk_err}")
         else:
             glob_pat = file_glob or "*"
             regex = re.compile(pattern, re.IGNORECASE)
             
-            for p in search_path.rglob(glob_pat):
-                if not p.is_file():
-                    continue
-                if p.suffix.lower() in ['.png', '.jpg', '.exe', '.zip', '.pdf', '.pyc']:
-                    continue
-                try:
-                    with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                        for idx, line in enumerate(f):
-                            if regex.search(line):
-                                results.append(f"{p.relative_to(search_path)}:{idx+1}: {line.strip()}")
-                                if len(results) >= limit:
-                                    break
-                except Exception:
-                    continue
-                if len(results) >= limit:
-                    break
+            try:
+                for root, dirs, files in os.walk(search_path, topdown=True):
+                    dirs[:] = [d for d in dirs if d.lower() not in skip_dirs and not d.startswith('.')]
                     
+                    for f in files:
+                        if not fnmatch.fnmatch(f, glob_pat):
+                            continue
+                        full_path = Path(root) / f
+                        if full_path.suffix.lower() in ['.png', '.jpg', '.jpeg', '.gif', '.exe', '.zip', '.pdf', '.pyc', '.pyd', '.dll']:
+                            continue
+                        try:
+                            with open(full_path, "r", encoding="utf-8", errors="ignore") as file_obj:
+                                for idx, line in enumerate(file_obj):
+                                    if regex.search(line):
+                                        results.append(f"{full_path.relative_to(search_path)}:{idx+1}: {line.strip()}")
+                                        if len(results) >= limit:
+                                            break
+                        except Exception:
+                            continue
+                        if len(results) >= limit:
+                            break
+                    if len(results) >= limit:
+                        break
+            except Exception as walk_err:
+                print(f"[hermes_tools] search content error: {walk_err}")
+                
         if not results:
             return "No matches found."
         return "\n".join(results)
