@@ -1401,6 +1401,14 @@ class JarvisLive:
             print(f"[Memory] ❌ Failed to sync memory from Hermes to ALICE: {e}")
 
     async def _run_local_hermes_task(self, task_id: str, query: str):
+        import os
+        import sys
+        import httpx
+        import json
+        import re
+        import platform
+        import subprocess
+        
         print(f"[ALICE] 🔄 SYS: Starting local Hermes task {task_id} for query: {query}")
         self.ui.write_log(f"SYS: Starting local Hermes task {task_id}")
         
@@ -1410,8 +1418,6 @@ class JarvisLive:
         project_dir = os.path.dirname(os.path.abspath(__file__))
         
         try:
-            import httpx
-            import json
             # Try to send query to daemon server first
             daemon_url = "http://127.0.0.1:8085/query"
             print(f"[ALICE] Attempting to route query to Hermes Daemon: {daemon_url}")
@@ -1444,7 +1450,6 @@ class JarvisLive:
                             for line in lines:
                                 line_str = line.strip()
                                 if line_str:
-                                    import re
                                     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
                                     clean_str = ansi_escape.sub('', line_str)
                                     if clean_str:
@@ -1488,8 +1493,6 @@ class JarvisLive:
                 return
 
             # FALLBACK to standard subprocess run
-            import os
-            import sys
             scripts_dir = os.path.dirname(sys.executable)
             hermes_path = os.path.join(scripts_dir, 'hermes.exe')
             if not os.path.exists(hermes_path):
@@ -1500,8 +1503,6 @@ class JarvisLive:
             hermes_home = os.path.join(project_dir, '.hermes')
             custom_env = {**os.environ, "HERMES_HOME": hermes_home}
             
-            import platform
-            import subprocess
             kwargs = {}
             if platform.system() == "Windows":
                 kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -1524,7 +1525,6 @@ class JarvisLive:
                         break
                     line_str = line.decode('utf-8', errors='ignore').strip()
                     if line_str:
-                        import re
                         ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
                         clean_str = ansi_escape.sub('', line_str)
                         if clean_str:
