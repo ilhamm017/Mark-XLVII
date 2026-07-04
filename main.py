@@ -1255,6 +1255,7 @@ class JarvisLive:
         self.speak(text)
 
     async def _poll_hermes_task(self, task_id: str, query: str):
+        print(f"[ALICE] 🔄 SYS: Started polling task {task_id} for query: {query}")
         self.ui.write_log(f"SYS: Started polling task {task_id}")
         url = self.get_server_url(f"/api/hermes/task/{task_id}")
         
@@ -1276,9 +1277,11 @@ class JarvisLive:
         while True:
             data = await loop.run_in_executor(None, _get_status)
             status = data.get("status")
+            print(f"[ALICE] 🔄 Polling task {task_id}: status={status}")
             
             if status == "completed":
                 response = data.get("response", "No response from Hermes.")
+                print(f"[ALICE] 🔄 HERMES: Task {task_id} completed.")
                 self.ui.write_log(f"HERMES: Task {task_id} completed.")
                 if hasattr(self.ui, "show_content"):
                     self.ui.show_content(f"HERMES RESPONSE ({task_id})", response)
@@ -1286,11 +1289,13 @@ class JarvisLive:
                 break
             elif status == "failed":
                 response = data.get("response", "Unknown failure.")
+                print(f"[ALICE] ❌ HERMES: Task {task_id} failed: {response}")
                 self.ui.write_log(f"HERMES: Task {task_id} failed.")
                 await self.speak_when_ready(f"Sir, the task {task_id} on Hermes server has failed: {response}")
                 break
             elif status == "error":
                 message = data.get("message", "")
+                print(f"[ALICE] ⚠️ SYS: Task poll connection error: {message}")
                 self.ui.write_log(f"SYS: Task poll connection error: {message}")
                 
             await asyncio.sleep(3)
