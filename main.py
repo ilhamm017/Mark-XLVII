@@ -1441,7 +1441,12 @@ class JarvisLive:
                 # Sync memory back from Hermes to ALICE
                 self._sync_memory_from_hermes()
                 
-                await self.speak_when_ready(f"Sir, local task {task_id} has been completed. Here is the response:\n{response_text}")
+                await self.speak_when_ready(
+                    f"Sir, local task {task_id} has been completed. "
+                    f"Please explain, summarize, and report all key details and findings of the following response "
+                    f"to the user in casual Indonesian/Javanese (Ragam Santai) so they know exactly what was found/done, "
+                    f"rather than just saying it's done or telling them to read it:\n{response_text}"
+                )
                 return
 
             # FALLBACK to standard subprocess run
@@ -1516,7 +1521,12 @@ class JarvisLive:
                 # Sync memory back from Hermes to ALICE
                 self._sync_memory_from_hermes()
                 
-                await self.speak_when_ready(f"Sir, local task {task_id} has been completed. Here is the response:\n{full_output}")
+                await self.speak_when_ready(
+                    f"Sir, local task {task_id} has been completed. "
+                    f"Please explain, summarize, and report all key details and findings of the following response "
+                    f"to the user in casual Indonesian/Javanese (Ragam Santai) so they know exactly what was found/done, "
+                    f"rather than just saying it's done or telling them to read it:\n{full_output}"
+                )
             else:
                 full_err = "\n".join(stderr_lines)
                 print(f"[ALICE] ❌ HERMES: Local task {task_id} failed with exit code {return_code}.")
@@ -1593,7 +1603,12 @@ class JarvisLive:
                 self.ui.write_log(f"HERMES: Task {task_id} completed.")
                 if hasattr(self.ui, "show_content"):
                     self.ui.show_content(f"HERMES RESPONSE ({task_id})", response)
-                await self.speak_when_ready(f"Sir, task {task_id} has been completed on the Hermes server. Here is the response:\n{response}")
+                await self.speak_when_ready(
+                    f"Sir, task {task_id} has been completed on the Hermes server. "
+                    f"Please explain, summarize, and report all key details and findings of the following response "
+                    f"to the user in casual Indonesian/Javanese (Ragam Santai) so they know exactly what was found/done, "
+                    f"rather than just saying it's done or telling them to read it:\n{response}"
+                )
                 break
             elif status == "failed":
                 response = data.get("response", "Unknown failure.")
