@@ -317,7 +317,7 @@ def _focus_window(title: str) -> str:
                     time.sleep(0.1)
                 
                 fore_hwnd = user32.GetForegroundWindow()
-                fore_thread = user32.GetWindowThreadProcessId(fore_hwnd, 0)
+                fore_thread = user32.GetWindowThreadProcessId(fore_hwnd, None) if fore_hwnd else 0
                 current_thread = kernel32.GetCurrentThreadId()
                 
                 attached = False
