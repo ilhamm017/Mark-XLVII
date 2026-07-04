@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 import threading
 import json
+import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
@@ -11,6 +12,35 @@ import uvicorn
 project_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(project_dir))
 sys.path.insert(0, str(project_dir / "hermes-agent"))
+
+class TaskFileHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] [%(name)s] %(message)s"))
+        self._local = threading.local()
+        self.task_logs = {}
+
+    def set_task_context(self, task_id: str, log_path: str):
+        self._local.task_id = task_id
+        self.task_logs[task_id] = log_path
+
+    def clear_task_context(self):
+        self._local.task_id = None
+
+    def emit(self, record):
+        try:
+            task_id = getattr(self._local, 'task_id', None)
+            if task_id and task_id in self.task_logs:
+                log_path = self.task_logs[task_id]
+                msg = self.format(record)
+                with open(log_path, "a", encoding="utf-8", errors="ignore") as f:
+                    f.write(msg + "\n")
+        except Exception:
+            self.handleError(record)
+
+task_handler = TaskFileHandler()
+task_handler.setLevel(logging.DEBUG)
+logging.getLogger().addHandler(task_handler)
 
 app = FastAPI()
 
@@ -48,6 +78,8 @@ def run_agent_bg(task_id: str, query: str, log_path: Path, done_path: Path):
     try:
         from hermes_cli.oneshot import _run_agent
         
+        task_handler.set_task_context(task_id, str(log_path))
+        
         # Set the same environment variables oneshot mode expects
         os.environ["HERMES_YOLO_MODE"] = "1"
         os.environ["HERMES_ACCEPT_HOOKS"] = "1"
@@ -68,6 +100,8 @@ def run_agent_bg(task_id: str, query: str, log_path: Path, done_path: Path):
             traceback.print_exc(file=f)
         with open(done_path, "w", encoding="utf-8") as f:
             json.dump({"response": "", "status": "error", "error": str(e)}, f)
+    finally:
+        task_handler.clear_task_context()
 
 @app.post("/query")
 async def handle_query(req: QueryRequest):
