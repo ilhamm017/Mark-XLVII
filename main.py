@@ -1475,11 +1475,18 @@ class JarvisLive:
             hermes_home = os.path.join(project_dir, '.hermes')
             custom_env = {**os.environ, "HERMES_HOME": hermes_home}
             
+            import platform
+            import subprocess
+            kwargs = {}
+            if platform.system() == "Windows":
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
             proc = await asyncio.create_subprocess_exec(
                 hermes_path, '-z', query,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=custom_env
+                env=custom_env,
+                **kwargs
             )
             
             stdout_lines = []
@@ -1544,6 +1551,8 @@ class JarvisLive:
         import os
         import sys
         import httpx
+        import platform
+        import subprocess
         
         project_dir = os.path.dirname(os.path.abspath(__file__))
         daemon_path = os.path.join(project_dir, 'hermes_daemon.py')
@@ -1557,10 +1566,15 @@ class JarvisLive:
             pass
             
         try:
+            kwargs = {}
+            if platform.system() == "Windows":
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
             self._hermes_daemon_proc = await asyncio.create_subprocess_exec(
                 sys.executable, daemon_path,
                 stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL
+                stderr=asyncio.subprocess.DEVNULL,
+                **kwargs
             )
             print("[ALICE] 🔄 Hermes Daemon started successfully on port 8085.")
         except Exception as e:
