@@ -16,4 +16,4 @@ swagger_doc.json
 
 venv/
 config/api_keys.json
-memory/
+/memory/
