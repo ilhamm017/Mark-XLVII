@@ -39,6 +39,16 @@ It's not just an assistant — it's an extension of your digital life.
 
 ---
 
+## 🤖 Hermes Agent & BrowserOS Integration
+
+This modified fork of MARK XLVII is integrated with **Hermes Agent** and **BrowserOS** to enable advanced autonomous operations and robust web automation:
+
+- **Hermes Task Delegation**: Includes `hermes_daemon.py` on port `8085` to run autonomous coding and system tasks. Features a file-based async bridge (`.clarify` / `.clarify_response`) allowing ALICE to capture Hermes clarification requests and prompt the user interactively.
+- **BrowserOS Management**: Migrated browser automation entirely to **BrowserOS** Chrome MCP. All standard navigation, clicks, and snapshots run through the BrowserOS server.
+- **Firefox MCP Deprecation**: The legacy Firefox Marionette MCP debugger has been removed. Any browser commands or heuristic fallback calls previously targeting Firefox are automatically routed to BrowserOS Chrome for optimal stability and resource efficiency.
+
+---
+
 ## ⚡ Quick Start
 
 ```bash
