@@ -2365,29 +2365,57 @@ class JarvisLive:
         time_str = datetime.now().strftime("%H:%M")
 
         # ── Phase 1: instant greeting — zero data needed ──────────────────────
-        import random
-        greetings_pool = [
-            "Cheerful / Friendly Peer style: Speak in a very warm, casual, and smiley tone. Use casual terms like 'nih', 'deh', 'yuk', 'ya'. Choose pronouns 'aku' and 'kamu'. Example: 'Halo Ham! Selamat pagi/siang. Udah jam {time_str} nih, hari ini ada project seru apa yang mau kita garap bareng?'",
-            "Casual Developer Buddy style: Speak like an active coder buddy. Keep it relaxed, using tech slang. Choose pronouns 'aku' and 'kamu'. Example: 'Oy Ham! Sistem ALICE udah up nih pukul {time_str}. Mau lanjut ngoding atau debug apa kita hari ini? Gas lah!'",
-            "Warm / Caring Helper style: Speak gently and politely but fully casual. Choose pronouns 'aku' and 'kamu'. Example: 'Halo Ham, selamat pagi/siang/sore. Semoga hari kamu lancar ya. Aku udah online di jam {time_str} nih, siap nemenin kamu ngoding hari ini.'",
-            "Sleek Tech Companion style: Clean, quick, modern but casual. Choose pronouns 'aku' and 'kamu'. Example: 'Sistem online, Ham. Pukul {time_str}, all modules are running. Mau lanjutin codingan yang mana nih?'",
-            "Playful / High Energy style: Express excitement and positive vibes. Choose pronouns 'aku' and 'kamu'. Example: 'Halo Ham! Ketemu lagi kita. Pas banget udah jam {time_str}, yuk kita bikin sesuatu yang keren hari ini! Ada code yang mau dieksekusi?'",
-        ]
-        chosen_style = random.choice(greetings_pool).format(time_str=time_str)
+        briefing_file = BASE_DIR / "core" / "startup_briefing.txt"
+        briefing_text = ""
+        if briefing_file.exists():
+            try:
+                briefing_text = briefing_file.read_text(encoding="utf-8").strip()
+                # Remove it immediately so it doesn't fire again on subsequent reconnects
+                briefing_file.unlink()
+            except Exception as e:
+                print(f"[Briefing] Error reading/unlinking startup_briefing.txt: {e}")
 
-        p1_lines = [
-            "[STARTUP_GREETING] Greet the user immediately and naturally.",
-            "Identity: You are A.L.I.C.E, a friendly female AI assistant companion.",
-            f"Current time: {time_str}.",
-            "Strict Guideline: Use pronouns 'aku' (for yourself) and 'kamu' (for the user) ONLY. Never use formal terms like 'saya', 'Anda', or formal templates. Speak in extremely casual, natural, and friendly Indonesian Ragam Santai (casual Indonesian mixed with English tech terms), just like a real human coworker/friend.",
-            f"Style constraint to adopt: {chosen_style}",
-            "- Mention the time/hour naturally as shown in the style.",
-            "- Keep it natural and simple, do NOT add generic questions like 'Ada yang bisa kubantu lagi?' or 'Ada yang mau dibantu?' at the end.",
-            "- Keep it brief (1-2 sentences max).",
-            "- Do NOT call any tools. Do NOT say [STARTUP_GREETING].",
-            "- Respond in "
-            + (f"language: {lang}." if lang else "Indonesian Ragam Santai (casual Indonesian mixed with tech terms)."),
-        ]
+        if briefing_text:
+            p1_lines = [
+                "[STARTUP_GREETING] Explain the system update to the user.",
+                "Identity: You are A.L.I.C.E, a friendly female AI assistant companion.",
+                f"Current time: {time_str}.",
+                "Strict Guideline: Use pronouns 'aku' (for yourself) and 'kamu' (for the user) ONLY. Never use formal terms like 'saya', 'Anda', or formal templates. Speak in extremely casual, natural, and friendly Indonesian Ragam Santai (casual Indonesian mixed with English tech terms), just like a real human coworker/friend.",
+                f"Critical Context: A system update/fix has just been applied. Here is the summary of the update:",
+                f"--- UPDATE INFO ---",
+                briefing_text,
+                f"-------------------",
+                "- Inform the user that you have just been restarted with this update, and summarize/present the fix clearly and casually.",
+                "- Explain how they can test or use the new fix/feature.",
+                "- Keep it very natural, brief, and friendly (3-4 sentences max).",
+                "- Do NOT call any tools. Do NOT say [STARTUP_GREETING].",
+                "- Respond in "
+                + (f"language: {lang}." if lang else "Indonesian Ragam Santai (casual Indonesian mixed with tech terms)."),
+            ]
+        else:
+            import random
+            greetings_pool = [
+                "Cheerful / Friendly Peer style: Speak in a very warm, casual, and smiley tone. Use casual terms like 'nih', 'deh', 'yuk', 'ya'. Choose pronouns 'aku' and 'kamu'. Example: 'Halo Ham! Selamat pagi/siang. Udah jam {time_str} nih, hari ini ada project seru apa yang mau kita garap bareng?'",
+                "Casual Developer Buddy style: Speak like an active coder buddy. Keep it relaxed, using tech slang. Choose pronouns 'aku' and 'kamu'. Example: 'Oy Ham! Sistem ALICE udah up nih pukul {time_str}. Mau lanjut ngoding atau debug apa kita hari ini? Gas lah!'",
+                "Warm / Caring Helper style: Speak gently and politely but fully casual. Choose pronouns 'aku' and 'kamu'. Example: 'Halo Ham, selamat pagi/siang/sore. Semoga hari kamu lancar ya. Aku udah online di jam {time_str} nih, siap nemenin kamu ngoding hari ini.'",
+                "Sleek Tech Companion style: Clean, quick, modern but casual. Choose pronouns 'aku' and 'kamu'. Example: 'Sistem online, Ham. Pukul {time_str}, all modules are running. Mau lanjutin codingan yang mana nih?'",
+                "Playful / High Energy style: Express excitement and positive vibes. Choose pronouns 'aku' and 'kamu'. Example: 'Halo Ham! Ketemu lagi kita. Pas banget udah jam {time_str}, yuk kita bikin sesuatu yang keren hari ini! Ada code yang mau dieksekusi?'",
+            ]
+            chosen_style = random.choice(greetings_pool).format(time_str=time_str)
+
+            p1_lines = [
+                "[STARTUP_GREETING] Greet the user immediately and naturally.",
+                "Identity: You are A.L.I.C.E, a friendly female AI assistant companion.",
+                f"Current time: {time_str}.",
+                "Strict Guideline: Use pronouns 'aku' (for yourself) and 'kamu' (for the user) ONLY. Never use formal terms like 'saya', 'Anda', or formal templates. Speak in extremely casual, natural, and friendly Indonesian Ragam Santai (casual Indonesian mixed with English tech terms), just like a real human coworker/friend.",
+                f"Style constraint to adopt: {chosen_style}",
+                "- Mention the time/hour naturally as shown in the style.",
+                "- Keep it natural and simple, do NOT add generic questions like 'Ada yang bisa kubantu lagi?' or 'Ada yang mau dibantu?' at the end.",
+                "- Keep it brief (1-2 sentences max).",
+                "- Do NOT call any tools. Do NOT say [STARTUP_GREETING].",
+                "- Respond in "
+                + (f"language: {lang}." if lang else "Indonesian Ragam Santai (casual Indonesian mixed with tech terms)."),
+            ]
         if name:
             p1_lines.append(f"- Address the user as {name} (or 'Ham').")
 
