@@ -25,7 +25,7 @@ import logging
 import os
 import sys
 from contextlib import redirect_stderr, redirect_stdout
-from typing import Optional
+from typing import Optional, Callable
 
 from hermes_cli.fallback_config import get_fallback_chain
 
@@ -253,6 +253,7 @@ def _run_agent(
     provider: Optional[str] = None,
     toolsets: object = None,
     use_config_toolsets: bool = True,
+    clarify_callback: Optional[Callable] = None,
 ) -> tuple[str, dict]:
     """Build an AIAgent exactly like a normal CLI chat turn would, then
     run a single conversation.  Returns ``(final_response, run_result)``."""
@@ -360,7 +361,7 @@ def _run_agent(
         #                (set above); also falls back to deny on non-tty
         #   - dangerous-command approval → bypassed via HERMES_YOLO_MODE=1
         #   - skill secret capture → returns gracefully when no callback set
-        clarify_callback=_oneshot_clarify_callback,
+        clarify_callback=clarify_callback or _oneshot_clarify_callback,
     )
 
     # Belt-and-braces: make sure AIAgent doesn't invoke any streaming

@@ -160,8 +160,63 @@ def run_agent_bg(task_id: str, query: str, log_path: Path, done_path: Path):
         # Ensure HERMES_HOME points to the internal .hermes directory
         os.environ["HERMES_HOME"] = str(project_dir / ".hermes")
         
+        def daemon_clarify_callback(question: str, choices=None) -> str:
+            # Write to clarify file
+            clarify_data = {
+                "question": question,
+                "choices": choices
+            }
+            clarify_file = log_path.parent / f"{task_id}.clarify"
+            try:
+                import tempfile
+                with tempfile.NamedTemporaryFile('w', dir=str(log_path.parent), delete=False, encoding="utf-8") as tf:
+                    json.dump(clarify_data, tf)
+                    temp_name = tf.name
+                os.replace(temp_name, str(clarify_file))
+                print(f"[Daemon] [Clarify] Wrote clarification request to {clarify_file}: {question}")
+            except Exception as w_err:
+                print(f"[Daemon] [Clarify] Error writing clarify request: {w_err}")
+                return f"[clarify error writing request: {w_err}]"
+                
+            response_file = log_path.parent / f"{task_id}.clarify_response"
+            
+            import time
+            timeout = 180.0  # 3 minutes timeout for user input
+            start_time = time.time()
+            
+            while time.time() - start_time < timeout:
+                if response_file.exists():
+                    try:
+                        with open(response_file, "r", encoding="utf-8") as rf:
+                            resp = json.load(rf)
+                        # Clean up files
+                        try:
+                            response_file.unlink()
+                        except Exception:
+                            pass
+                        try:
+                            clarify_file.unlink()
+                        except Exception:
+                            pass
+                        user_ans = resp.get("response", "")
+                        print(f"[Daemon] [Clarify] Received user response: {user_ans}")
+                        return user_ans
+                    except Exception as e:
+                        # might be writing, wait
+                        time.sleep(0.5)
+                        continue
+                time.sleep(0.5)
+            
+            # Timeout cleanup
+            try:
+                clarify_file.unlink()
+            except Exception:
+                pass
+            print(f"[Daemon] [Clarify] Clarification timed out after {timeout} seconds.")
+            return "[clarify timeout: User did not respond in time. Pick the best option using your own judgment.]"
+
         with FileRedirector(log_path):
-            response, result = _run_agent(query)
+            response, result = _run_agent(query, clarify_callback=daemon_clarify_callback)
             
         with open(done_path, "w", encoding="utf-8") as f:
             json.dump({"response": response, "status": "success"}, f)

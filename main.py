@@ -488,6 +488,18 @@ def _clean_transcript(text: str) -> str:
 
 TOOL_DECLARATIONS = [
     {
+        "name": "submit_hermes_clarification",
+        "description": "Submits the user's choice or answer to a pending Hermes task clarification request.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "task_id": {"type": "STRING", "description": "The ID of the task requesting clarification (e.g. 'local_a3bc1e')"},
+                "response": {"type": "STRING", "description": "The user's response, decision, or choice to submit"}
+            },
+            "required": ["task_id", "response"]
+        }
+    },
+    {
         "name": "view_alice_skill",
         "description": "Loads the detailed instructions and steps for an available ALICE desktop/voice skill.",
         "parameters": {
@@ -1463,9 +1475,39 @@ class JarvisLive:
                 # Poll and tail log file in real-time, checking for the done file
                 log_path = os.path.join(project_dir, ".hermes", "logs", f"{task_id}.log")
                 done_path = os.path.join(project_dir, ".hermes", "logs", f"{task_id}.done")
+                clarify_path = os.path.join(project_dir, ".hermes", "logs", f"{task_id}.clarify")
                 
                 last_pos = 0
+                asked_clarify_questions = set()
+                
                 while True:
+                    # Check for clarification request from background task
+                    if os.path.exists(clarify_path):
+                        try:
+                            with open(clarify_path, "r", encoding="utf-8") as f:
+                                c_data = json.load(f)
+                            question = c_data.get("question", "")
+                            choices = c_data.get("choices")
+                            
+                            q_key = f"{task_id}_{question}"
+                            if q_key not in asked_clarify_questions:
+                                asked_clarify_questions.add(q_key)
+                                
+                                choices_str = f" Pilihan yang tersedia: {choices}." if choices else ""
+                                prompt_text = (
+                                    f"[SYSTEM NOTICE: The background Hermes task {task_id} requires user clarification.\n"
+                                    f"Question: {question}\n"
+                                    f"{choices_str}\n"
+                                    f"Please speak/ask the user this clarifying question immediately and present the options. "
+                                    f"Once the user gives their answer/decision, you MUST invoke the `submit_hermes_clarification` tool with task_id='{task_id}' and their response. "
+                                    f"Do NOT make assumptions, ask them directly.]"
+                                )
+                                print(f"[ALICE] Injecting clarify prompt to Live session for task {task_id}")
+                                if self.session:
+                                    await self.session.send_realtime_input(text=prompt_text)
+                        except Exception as c_err:
+                            print(f"[ALICE] Error handling clarification check: {c_err}")
+
                     if os.path.exists(log_path):
                         try:
                             with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -1864,7 +1906,22 @@ class JarvisLive:
         result = "Done."
 
         try:
-            if name == "view_alice_skill":
+            if name == "submit_hermes_clarification":
+                task_id = args.get("task_id")
+                response_val = args.get("response")
+                project_dir = os.path.dirname(os.path.abspath(__file__))
+                response_path = os.path.join(project_dir, ".hermes", "logs", f"{task_id}.clarify_response")
+                
+                try:
+                    with open(response_path, "w", encoding="utf-8") as f:
+                        json.dump({"response": response_val}, f)
+                    result = f"Successfully submitted clarification response: '{response_val}' to task {task_id}."
+                    print(f"[ALICE] {result}")
+                except Exception as e:
+                    result = f"Failed to write clarification response: {e}"
+                    print(f"[ALICE] {result}")
+
+            elif name == "view_alice_skill":
                 skill_id = args.get("skill_id") or ""
                 skill_id = os.path.basename(skill_id)
                 skills_dir = BASE_DIR / "skills"
@@ -2143,20 +2200,23 @@ class JarvisLive:
                     await asyncio.sleep(0.5)
                     continue
 
-                print("[ALICE] 🎤 Opening mic stream...")
+                if not getattr(self, "_last_mic_error", None):
+                    print("[ALICE] [Mic] Opening mic stream...")
                 loop.call_soon_threadsafe(self.ui.set_mic_active, True)
                 try:
                     mic_device_name = _load_config_value("mic_device_name", None)
                     mic_device_idx = None
                     if mic_device_name:
                         try:
+                            norm_cfg_name = mic_device_name.replace('\r\n', '\n').replace('\r', '\n')
                             devices = sd.query_devices()
                             for idx, dev in enumerate(devices):
-                                if dev['max_input_channels'] > 0 and dev['name'] == mic_device_name:
+                                norm_dev_name = dev['name'].replace('\r\n', '\n').replace('\r', '\n')
+                                if dev['max_input_channels'] > 0 and norm_dev_name == norm_cfg_name:
                                     mic_device_idx = idx
                                     break
                         except Exception as e:
-                            print(f"[ALICE] Error resolving input device: {e}")
+                            print(f"[ALICE] [Mic] Error resolving input device: {e}")
 
                     with sd.InputStream(
                         device=mic_device_idx,
@@ -2166,16 +2226,24 @@ class JarvisLive:
                         blocksize=CHUNK_SIZE,
                         callback=callback,
                     ) as stream:
-                        print("[ALICE] 🎤 Mic stream open and active")
+                        print("[ALICE] [Mic] Stream open and active")
+                        self._last_mic_error = None
                         while stream.active and self.session:
                             await asyncio.sleep(0.5)
-                        print("[ALICE] ⚠️ Mic stream inactive or session closed. Releasing...")
+                        print("[ALICE] [Mic] Stream inactive or session closed. Releasing...")
+                except Exception as stream_err:
+                    err_msg = str(stream_err)
+                    if not hasattr(self, "_last_mic_error") or self._last_mic_error != err_msg:
+                        self._last_mic_error = err_msg
+                        print(f"[ALICE] [Mic] Error: {err_msg}")
+                    loop.call_soon_threadsafe(self.ui.set_mic_active, False)
+                    await asyncio.sleep(15.0)
                 finally:
                     loop.call_soon_threadsafe(self.ui.set_mic_active, False)
                     loop.call_soon_threadsafe(self.ui.set_user_speaking, False)
                 await asyncio.sleep(1.0)
         except Exception as e:
-            print(f"[ALICE] ❌ Mic: {e}")
+            print(f"[ALICE] [Mic] Fatal task error: {e}")
             raise
 
     async def _receive_audio(self):
@@ -2313,9 +2381,11 @@ class JarvisLive:
                         spk_device_idx = None
                         if spk_device_name:
                             try:
+                                norm_cfg_name = spk_device_name.replace('\r\n', '\n').replace('\r', '\n')
                                 devices = sd.query_devices()
                                 for idx, dev in enumerate(devices):
-                                    if dev['max_output_channels'] > 0 and dev['name'] == spk_device_name:
+                                    norm_dev_name = dev['name'].replace('\r\n', '\n').replace('\r', '\n')
+                                    if dev['max_output_channels'] > 0 and norm_dev_name == norm_cfg_name:
                                         spk_device_idx = idx
                                         break
                             except Exception as e:
@@ -2418,9 +2488,26 @@ class JarvisLive:
             except Exception as e:
                 print(f"[Briefing] Error reading/unlinking startup_briefing.txt: {e}")
 
+        # Load session history if available
+        history_lines = []
+        try:
+            import json
+            history_file = BASE_DIR / "core" / "session_history.json"
+            if history_file.exists():
+                with open(history_file, "r", encoding="utf-8") as f:
+                    history = json.load(f)
+                if history:
+                    history_lines.append("--- RECENT CONVERSATION HISTORY (CONTEXT BEFORE RESTART) ---")
+                    for turn in history:
+                        spk = "You" if turn["speaker"] == "user" else "Alice"
+                        history_lines.append(f"{spk}: {turn['text']}")
+                    history_lines.append("Use this history to understand the previous conversation context and transition smoothly.")
+        except Exception as e:
+            print(f"[Briefing] Error reading session history for briefing: {e}")
+
         if briefing_text:
             p1_lines = [
-                "[STARTUP_GREETING] Explain the system update to the user.",
+                "[STARTUP_GREETING] Explain the system update to the user and seamlessly continue the previous context.",
                 "Identity: You are A.L.I.C.E, a friendly female AI assistant companion.",
                 f"Current time: {time_str}.",
                 "Strict Guideline: Use pronouns 'aku' (for yourself) and 'kamu' (for the user) ONLY. Never use formal terms like 'saya', 'Anda', or formal templates. Speak in extremely casual, natural, and friendly Indonesian Ragam Santai (casual Indonesian mixed with English tech terms), just like a real human coworker/friend.",
@@ -2428,13 +2515,18 @@ class JarvisLive:
                 f"--- UPDATE INFO ---",
                 briefing_text,
                 f"-------------------",
+            ]
+            if history_lines:
+                p1_lines.extend(history_lines)
+            p1_lines.extend([
                 "- Inform the user that you have just been restarted with this update, and summarize/present the fix clearly and casually.",
+                "- Use the recent conversation history context above to seamlessly transition back to what the user and you were doing/discussing before the update.",
                 "- Explain how they can test or use the new fix/feature.",
                 "- Keep it very natural, brief, and friendly (3-4 sentences max).",
                 "- Do NOT call any tools. Do NOT say [STARTUP_GREETING].",
                 "- Respond in "
                 + (f"language: {lang}." if lang else "Indonesian Ragam Santai (casual Indonesian mixed with tech terms)."),
-            ]
+            ])
         else:
             import random
             greetings_pool = [
@@ -2452,13 +2544,20 @@ class JarvisLive:
                 f"Current time: {time_str}.",
                 "Strict Guideline: Use pronouns 'aku' (for yourself) and 'kamu' (for the user) ONLY. Never use formal terms like 'saya', 'Anda', or formal templates. Speak in extremely casual, natural, and friendly Indonesian Ragam Santai (casual Indonesian mixed with English tech terms), just like a real human coworker/friend.",
                 f"Style constraint to adopt: {chosen_style}",
+            ]
+            if history_lines:
+                p1_lines.extend(history_lines)
+                p1_lines.extend([
+                    "- Refer to the recent conversation history context above if applicable (e.g. continue what you were doing).",
+                ])
+            p1_lines.extend([
                 "- Mention the time/hour naturally as shown in the style.",
                 "- Keep it natural and simple, do NOT add generic questions like 'Ada yang bisa kubantu lagi?' or 'Ada yang mau dibantu?' at the end.",
                 "- Keep it brief (1-2 sentences max).",
                 "- Do NOT call any tools. Do NOT say [STARTUP_GREETING].",
                 "- Respond in "
                 + (f"language: {lang}." if lang else "Indonesian Ragam Santai (casual Indonesian mixed with tech terms)."),
-            ]
+            ])
         if name:
             p1_lines.append(f"- Address the user as {name} (or 'Ham').")
 
