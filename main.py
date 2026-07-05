@@ -222,7 +222,9 @@ async def fetch_browseros_mcp_tools() -> list:
             declarations = []
             for tool in mcp_tools:
                 name = tool.get("name")
-                desc = tool.get("description")
+                desc = tool.get("description", "")
+                # Prepend BrowserOS Chrome ONLY to prevent model confusion with Firefox MCP
+                desc = f"[BrowserOS Chrome ONLY] {desc}"
                 input_schema = tool.get("inputSchema", {})
                 parameters = convert_schema_to_uppercase(input_schema)
                 
@@ -402,7 +404,9 @@ async def fetch_custom_mcp_tools() -> list:
             declarations = []
             for tool in mcp_tools:
                 name = tool.get("name")
-                desc = tool.get("description")
+                desc = tool.get("description", "")
+                # Prepend Firefox ONLY to prevent model confusion with BrowserOS
+                desc = f"[Firefox ONLY] {desc}"
                 input_schema = tool.get("inputSchema", {})
                 parameters = convert_schema_to_uppercase(input_schema)
                 
