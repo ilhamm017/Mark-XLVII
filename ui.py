@@ -2540,19 +2540,32 @@ class MainWindow(QMainWindow):
             log_files = glob.glob(os.path.join(logs_dir, "*.log"))
             log_files.sort(key=os.path.getmtime, reverse=True)
             
+            # Query daemon for actual active tasks to avoid listing dead tasks as running (🟢)
+            active_running_tasks = []
+            try:
+                import urllib.request
+                import json
+                req = urllib.request.Request("http://127.0.0.1:8085/tasks")
+                with urllib.request.urlopen(req, timeout=0.1) as response:
+                    data = json.loads(response.read().decode())
+                    active_running_tasks = data.get("active_tasks", [])
+            except Exception:
+                pass
+
             current_tasks = []
             for f in log_files:
                 task_id = os.path.basename(f)[:-4]
                 if task_id in ("agent", "errors"):
                     continue
                 done_file = os.path.join(logs_dir, f"{task_id}.done")
-                is_running = not os.path.exists(done_file)
+                is_running = not os.path.exists(done_file) and (task_id in active_running_tasks)
                 status_str = "🟢" if is_running else "⚪"
                 
                 # Keep only running tasks, or tasks completed in the last 15 minutes (900 seconds)
                 if not is_running:
                     try:
-                        mtime = os.path.getmtime(done_file)
+                        ref_file = done_file if os.path.exists(done_file) else f
+                        mtime = os.path.getmtime(ref_file)
                         import time
                         if time.time() - mtime > 900:
                             continue

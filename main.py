@@ -1312,6 +1312,27 @@ class JarvisLive:
             
         self.speak(text)
 
+    def save_to_session_history(self, speaker: str, text: str):
+        try:
+            import json
+            from pathlib import Path
+            history_file = BASE_DIR / "core" / "session_history.json"
+            history = []
+            if history_file.exists():
+                try:
+                    with open(history_file, "r", encoding="utf-8") as f:
+                        history = json.load(f)
+                except Exception:
+                    pass
+            
+            history.append({"speaker": speaker, "text": text})
+            history = history[-10:]
+            
+            with open(history_file, "w", encoding="utf-8") as f:
+                json.dump(history, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[History] Error saving session history: {e}")
+
     def _sync_memory_to_hermes(self):
         try:
             from memory.memory_manager import load_memory
@@ -1759,6 +1780,25 @@ class JarvisLive:
         )
 
         parts = [time_ctx, env_ctx]
+        
+        # Load and append recent chat context/history to prevent memory loss on restart
+        try:
+            import json
+            from pathlib import Path
+            history_file = BASE_DIR / "core" / "session_history.json"
+            if history_file.exists():
+                with open(history_file, "r", encoding="utf-8") as f:
+                    history = json.load(f)
+                if history:
+                    history_lines = ["[RECENT CONVERSATION HISTORY (POST-RESTART CONTEXT)]"]
+                    for turn in history:
+                        spk = "You" if turn["speaker"] == "user" else "Alice"
+                        history_lines.append(f"{spk}: {turn['text']}")
+                    history_lines.append("Use the conversation history above to seamlessly continue the previous discussion without asking the user to repeat themselves.")
+                    parts.append("\n".join(history_lines) + "\n")
+        except Exception as e:
+            print(f"[History] Error injecting history to system instruction: {e}")
+
         if mem_str:
             parts.append(mem_str)
 
@@ -2184,6 +2224,7 @@ class JarvisLive:
                             full_in = " ".join(in_buf).strip()
                             if full_in:
                                 self.ui.write_log(f"You: {full_in}")
+                                self.save_to_session_history("user", full_in)
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
                                         "type": "log", "speaker": "user",
@@ -2195,6 +2236,7 @@ class JarvisLive:
                             full_out = " ".join(out_buf).strip()
                             if full_out:
                                 self.ui.write_log(f"Alice: {full_out}")
+                                self.save_to_session_history("alice", full_out)
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
                                         "type": "log", "speaker": "alice",

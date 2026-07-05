@@ -49,6 +49,10 @@ firefox_lock = threading.Lock()
 firefox_stdout_queue = queue.Queue()
 firefox_active_requests = {}
 
+# --- Active Hermes Tasks Tracking ---
+active_tasks = set()
+active_tasks_lock = threading.Lock()
+
 def read_firefox_stdout(p):
     while True:
         try:
@@ -171,6 +175,8 @@ def run_agent_bg(task_id: str, query: str, log_path: Path, done_path: Path):
             json.dump({"response": "", "status": "error", "error": str(e)}, f)
     finally:
         task_handler.clear_task_context()
+        with active_tasks_lock:
+            active_tasks.discard(task_id)
 
 @app.post("/query")
 async def handle_query(req: QueryRequest):
@@ -191,6 +197,9 @@ async def handle_query(req: QueryRequest):
         except Exception:
             pass
             
+    with active_tasks_lock:
+        active_tasks.add(req.task_id)
+            
     t = threading.Thread(
         target=run_agent_bg,
         args=(req.task_id, req.query, log_path, done_path),
@@ -199,6 +208,11 @@ async def handle_query(req: QueryRequest):
     t.start()
     
     return {"status": "started"}
+
+@app.get("/tasks")
+async def get_active_tasks():
+    with active_tasks_lock:
+        return {"active_tasks": list(active_tasks)}
 
 @app.post("/firefox/mcp")
 async def handle_firefox_mcp(request: Request):

@@ -156,8 +156,11 @@ Apabila user meminta asisten menambahkan kemampuan (tool) baru secara dinamis:
 5. **Verifikasi Sintaks**: Jalankan `python -m py_compile main.py actions/my_feature.py` untuk menjamin tidak ada typo sintaks.
 
 ### Langkah Relaunch (Restart Service):
-Setelah file berhasil diubah atau tool baru selesai ditambahkan, ALICE **wajib di-restart** agar pythonw memuat modul baru dari cache memori disk. Jalankan perintah ini via Windows Terminal:
+Setelah file berhasil diubah, bug diperbaiki, atau tool baru selesai ditambahkan, ALICE **wajib di-restart** agar pythonw memuat modul baru dari cache memori disk.
+
+**CRITICAL: Sebelum melakukan restart**, kamu (Hermes Agent/Developer) **WAJIB** menulis penjelasan singkat tentang perbaikan atau pembaruan yang baru saja dilakukan ke file `core/startup_briefing.txt` (misalnya: `X:\Mark-XLVII\core\startup_briefing.txt` di Windows). Tulis isi briefing dalam 3-4 kalimat menggunakan bahasa Indonesia/Jawa yang santai. Ini penting agar ALICE bisa langsung membacakan dan menjelaskan pembaruan tersebut kepada user saat dia boot kembali.
+
+Setelah file briefing ditulis, jalankan perintah ini via Windows Terminal (atau via `system_control`):
 ```powershell
 taskkill /F /IM python.exe ; taskkill /F /IM pythonw.exe ; schtasks /end /tn "RunAlice" ; schtasks /run /tn "RunAlice"
 ```
-*(Atau minta ALICE melakukan restart otonom dengan memanggil perintah di atas melalui tool `system_control`)*
