@@ -1387,12 +1387,59 @@ def _run_via_firefox_mcp(action: str, params: dict) -> str | None:
             return "Closed active Firefox tab."
 
         if action == "get_text":
-            r = call_mcp_checked("take_snapshot", {"maxLines": 500})
+            r = call_mcp_checked("take_snapshot", {"maxLines": 1500, "includeAll": True})
             if "content" in r:
                 for c in r["content"]:
                     if c.get("type") == "text":
                         return c.get("text", "")[:4000]
             return "No content."
+
+        if action == "click":
+            ref = params.get("ref", "")
+            if not ref:
+                return "Click action requires a reference (ref) UID in Firefox. Please take a snapshot to find the UID."
+            ref_clean = ref.strip()
+            if ref_clean.startswith("@e"):
+                ref_clean = ref_clean[2:]
+            elif ref_clean.startswith("e"):
+                ref_clean = ref_clean[1:]
+            elif ref_clean.startswith("@"):
+                ref_clean = ref_clean[1:]
+            call_mcp_checked("click_by_uid", {"uid": ref_clean})
+            return f"Clicked element {ref} in Firefox."
+
+        if action in ("type", "fill", "fill_form"):
+            ref = params.get("ref", "")
+            val = params.get("text", "") or params.get("value", "")
+            if not ref:
+                return "Type/Fill action requires a reference (ref) UID in Firefox. Please take a snapshot to find the UID."
+            ref_clean = ref.strip()
+            if ref_clean.startswith("@e"):
+                ref_clean = ref_clean[2:]
+            elif ref_clean.startswith("e"):
+                ref_clean = ref_clean[1:]
+            elif ref_clean.startswith("@"):
+                ref_clean = ref_clean[1:]
+            call_mcp_checked("fill_by_uid", {"uid": ref_clean, "value": val})
+            return f"Typed '{val}' into element {ref} in Firefox."
+
+        if action == "hover":
+            ref = params.get("ref", "")
+            if not ref:
+                return "Hover action requires a reference (ref) UID in Firefox."
+            ref_clean = ref.strip()
+            if ref_clean.startswith("@e"):
+                ref_clean = ref_clean[2:]
+            elif ref_clean.startswith("e"):
+                ref_clean = ref_clean[1:]
+            elif ref_clean.startswith("@"):
+                ref_clean = ref_clean[1:]
+            call_mcp_checked("hover_by_uid", {"uid": ref_clean})
+            return f"Hovered over element {ref} in Firefox."
+
+        if action == "press":
+            key = params.get("key", "Enter")
+            return f"Keyboard press key '{key}' is not directly supported via Firefox MCP. If you want to submit a search or form, please locate the search/submit button UID using 'take_snapshot' and click it."
 
         if action == "get_url":
             r = call_mcp_checked("list_pages")
