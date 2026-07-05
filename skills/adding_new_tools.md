@@ -20,9 +20,10 @@ Gunakan panduan ini ketika user meminta ALICE melakukan sesuatu yang membutuhkan
      1. Tambahkan import di bagian atas: `from actions.my_new_action import my_new_action`
      2. Tambahkan skema JSON tool ke dalam array `TOOL_DECLARATIONS` di `main.py`.
      3. Tambahkan cabang `elif name == "my_new_action":` di bagian dispatcher pemanggilan tool (sekitar baris 1800+) agar fungsi tersebut dieksekusi.
-   - **Langkah C: Lakukan Restart Otomatis**
-     Setelah file berhasil di-patch, picu restart ALICE agar memuat kode baru dengan mengeksekusi perintah Windows Command via shell:
+   - **Langkah C: Tulis Startup Briefing & Restart Otomatis**
+     Sebelum me-restart ALICE, buat file `core/startup_briefing.txt` di folder Windows (`X:\Mark-XLVII\core\startup_briefing.txt`) berisi ringkasan update/perbaikan yang baru saja dilakukan. Kamu bisa menulisnya langsung lewat SSH/PowerShell atau membuatnya di server Linux lalu di-scp ke Windows.
+     Setelah file briefing terbuat, picu restart ALICE dengan menjalankan perintah:
      ```powershell
-     schtasks /run /tn "RunAlice"
+     Stop-Process -Name python -ErrorAction SilentlyContinue; Stop-Process -Name pythonw -ErrorAction SilentlyContinue; schtasks /end /tn "RunAlice"; schtasks /run /tn "RunAlice"
      ```
-     (Atau matikan `pythonw.exe` lalu picu kembali scheduler-nya agar berjalan bersih).
+     Dengan cara ini, begitu ALICE menyala kembali, dia akan langsung membaca file tersebut, melaporkan perbaikan terbarunya kepada user secara ramah, lalu otomatis menghapus file briefing tersebut agar tidak berulang.
