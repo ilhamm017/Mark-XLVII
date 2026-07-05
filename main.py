@@ -1484,12 +1484,10 @@ class JarvisLive:
                 self._sync_memory_from_hermes()
                 
                 await self.speak_when_ready(
-                    f"[SYSTEM MESSAGE: The background task {task_id} has completed. "
-                    f"You MUST read this output and explain all key details, numbers, versions, findings, "
-                    f"and statuses to the user in casual Indonesian/Javanese (Ragam Santai) in detail. "
-                    f"Do NOT just tell them to read it, and do NOT give a lazy one-sentence summary. "
-                    f"Walk through the actual findings step-by-step so the user gets the full explanation verbally. "
-                    f"Output:\n{response_text}]"
+                    f"Sir, local task {task_id} has completed successfully. "
+                    f"Please explain the full findings, statuses, versions, paths, and details from the output below to the user in casual Indonesian/Javanese (Ragam Santai). "
+                    f"Do NOT be concise, do NOT give a lazy summary, and do NOT ask the user to read it themselves. Explain it step-by-step in detail. "
+                    f"Output:\n{response_text}"
                 )
                 return
 
@@ -1562,12 +1560,10 @@ class JarvisLive:
                 self._sync_memory_from_hermes()
                 
                 await self.speak_when_ready(
-                    f"[SYSTEM MESSAGE: The background task {task_id} has completed. "
-                    f"You MUST read this output and explain all key details, numbers, versions, findings, "
-                    f"and statuses to the user in casual Indonesian/Javanese (Ragam Santai) in detail. "
-                    f"Do NOT just tell them to read it, and do NOT give a lazy one-sentence summary. "
-                    f"Walk through the actual findings step-by-step so the user gets the full explanation verbally. "
-                    f"Output:\n{full_output}]"
+                    f"Sir, local task {task_id} has completed successfully. "
+                    f"Please explain the full findings, statuses, versions, paths, and details from the output below to the user in casual Indonesian/Javanese (Ragam Santai). "
+                    f"Do NOT be concise, do NOT give a lazy summary, and do NOT ask the user to read it themselves. Explain it step-by-step in detail. "
+                    f"Output:\n{full_output}"
                 )
             else:
                 full_err = "\n".join(stderr_lines)
@@ -1665,12 +1661,10 @@ class JarvisLive:
                 if hasattr(self.ui, "show_content"):
                     self.ui.show_content(f"HERMES RESPONSE ({task_id})", response)
                 await self.speak_when_ready(
-                    f"[SYSTEM MESSAGE: The task {task_id} on Hermes server has completed. "
-                    f"You MUST read this output and explain all key details, numbers, versions, findings, "
-                    f"and statuses to the user in casual Indonesian/Javanese (Ragam Santai) in detail. "
-                    f"Do NOT just tell them to read it, and do NOT give a lazy one-sentence summary. "
-                    f"Walk through the actual findings step-by-step so the user gets the full explanation verbally. "
-                    f"Output:\n{response}]"
+                    f"Sir, local task {task_id} has completed successfully. "
+                    f"Please explain the full findings, statuses, versions, paths, and details from the output below to the user in casual Indonesian/Javanese (Ragam Santai). "
+                    f"Do NOT be concise, do NOT give a lazy summary, and do NOT ask the user to read it themselves. Explain it step-by-step in detail. "
+                    f"Output:\n{response}"
                 )
                 break
             elif status == "failed":

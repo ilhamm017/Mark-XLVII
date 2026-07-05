@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from hermes_cli._subprocess_compat import windows_hide_flags
 from tools.environments.base import BaseEnvironment, _popen_bash
 from tools.environments.file_sync import (
     FileSyncManager,
@@ -257,11 +258,13 @@ class SSHEnvironment(BaseEnvironment):
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                creationflags=windows_hide_flags(),
             )
             try:
                 ssh_proc = subprocess.Popen(
                     ssh_cmd, stdin=tar_proc.stdout, stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
+                    creationflags=windows_hide_flags(),
                 )
             except Exception:
                 tar_proc.kill()
