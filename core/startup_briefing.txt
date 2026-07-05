@@ -1,0 +1,1 @@
+[STARTUP_BRIEFING] Halo Ham! Aku wis ngapikake sistem routing browser lan input Firefox. Masalah salah sasaran menyang YouTube Music wis diatasi kanthi misahake aturan youtube.com lan aplikasi desktop. Aku uga wis nambahake deteksi UID sing bener lan proteksi shortcut keyboard ing YouTube Firefox.

@@ -721,6 +721,7 @@ TOOL_DECLARATIONS = [
                 "query":       {"type": "STRING", "description": "Search query for search action"},
                 "engine":      {"type": "STRING", "description": "Search engine: google | bing | duckduckgo | yandex (default: google)"},
                 "selector":    {"type": "STRING", "description": "CSS selector for click/type"},
+                "ref":         {"type": "STRING", "description": "Element reference ID (UID) from snapshot for Firefox (e.g. '@e5', '1_10')"},
                 "text":        {"type": "STRING", "description": "Text to click or type"},
                 "description": {"type": "STRING", "description": "Element description for smart_click/smart_type"},
                 "direction":   {"type": "STRING", "description": "up | down for scroll"},

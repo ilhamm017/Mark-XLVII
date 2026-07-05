@@ -1395,7 +1395,7 @@ def _run_via_firefox_mcp(action: str, params: dict) -> str | None:
             return "No content."
 
         if action == "click":
-            ref = params.get("ref", "")
+            ref = params.get("ref", "") or params.get("selector", "")
             if not ref:
                 return "Click action requires a reference (ref) UID in Firefox. Please take a snapshot to find the UID."
             ref_clean = ref.strip()
@@ -1409,7 +1409,7 @@ def _run_via_firefox_mcp(action: str, params: dict) -> str | None:
             return f"Clicked element {ref} in Firefox."
 
         if action in ("type", "fill", "fill_form"):
-            ref = params.get("ref", "")
+            ref = params.get("ref", "") or params.get("selector", "")
             val = params.get("text", "") or params.get("value", "")
             if not ref:
                 return "Type/Fill action requires a reference (ref) UID in Firefox. Please take a snapshot to find the UID."
@@ -1424,7 +1424,7 @@ def _run_via_firefox_mcp(action: str, params: dict) -> str | None:
             return f"Typed '{val}' into element {ref} in Firefox."
 
         if action == "hover":
-            ref = params.get("ref", "")
+            ref = params.get("ref", "") or params.get("selector", "")
             if not ref:
                 return "Hover action requires a reference (ref) UID in Firefox."
             ref_clean = ref.strip()
