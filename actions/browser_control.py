@@ -1437,6 +1437,10 @@ def _run_via_firefox_mcp(action: str, params: dict) -> str | None:
             return f"Searching {engine} for '{query}'"
 
     except Exception as e:
+        err_msg = str(e)
+        if "BiDi error" in err_msg or "unknown error" in err_msg.lower():
+            target_url = params.get("url", "") or params.get("query", "")
+            return f"Firefox failed to load the webpage: The webpage at '{target_url}' could not be reached (DNS, network connection, or host resolution error)."
         return f"Firefox MCP action failed: {e}"
 
     return None
@@ -1452,6 +1456,35 @@ def browser_control(
     action  = params.get("action", "").lower().strip()
     browser = params.get("browser", "").lower().strip() or None
     result  = "Unknown action."
+
+    # Normalize action names to prevent model confusion
+    action_norm = {
+        "open_new_tab": "new_tab",
+        "new_page": "new_tab",
+        "open_tab": "new_tab",
+        "create_tab": "new_tab",
+        "tab_new": "new_tab",
+        "navigate": "go_to",
+        "open_url": "go_to",
+        "open_website": "go_to",
+        "open_link": "go_to",
+        "load_url": "go_to",
+        "visit": "go_to",
+        "close_tab": "close_tab",
+        "close_page": "close_tab",
+        "tab_close": "close_tab",
+        "refresh": "reload",
+        "take_screenshot": "screenshot",
+        "capture_screen": "screenshot",
+        "screen_capture": "screenshot",
+        "read_text": "get_text",
+        "page_text": "get_text",
+        "extract_text": "get_text",
+        "current_url": "get_url",
+        "read_url": "get_url",
+    }
+    if action in action_norm:
+        action = action_norm[action]
 
     if action == "switch":
         target = browser or params.get("target", "").lower().strip()

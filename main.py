@@ -2004,24 +2004,29 @@ class JarvisLive:
                         # Smarter heuristic fallbacks based on name keywords
                         vscode_keywords = {"editor", "vscode", "terminal", "file", "directory", "grep", "insert", "replace", "execute_command"}
                         browseros_keywords = {"tab", "navigate", "screenshot", "pdf", "click", "type", "hover", "scroll", "download", "upload"}
+                        firefox_tools = {"list_pages", "new_page", "navigate_page", "select_page", "close_page", "take_snapshot", "screenshot_page", "navigate_history"}
                         
-                        is_vscode = name.endswith("_code") or any(kw in name.lower() for kw in vscode_keywords)
-                        is_browser = any(kw in name.lower() for kw in browseros_keywords)
-                        
-                        if is_vscode and not is_browser:
-                            print(f"[ALICE] Heuristic: Forwarding {name} call to VS Code MCP server...")
-                            mcp_res = await call_vscode_mcp_tool(name, args)
-                        elif is_browser and not is_vscode:
-                            print(f"[ALICE] Heuristic: Forwarding {name} call to BrowserOS MCP server...")
-                            mcp_res = await call_browseros_mcp_tool(name, args)
+                        if name in firefox_tools or name.endswith("_page"):
+                            print(f"[ALICE] Heuristic: Forwarding {name} call to Custom Firefox MCP server...")
+                            mcp_res = await call_custom_mcp_tool(name, args)
                         else:
-                            # Default fallback
-                            if name.endswith("_code"):
+                            is_vscode = name.endswith("_code") or any(kw in name.lower() for kw in vscode_keywords)
+                            is_browser = any(kw in name.lower() for kw in browseros_keywords)
+                            
+                            if is_vscode and not is_browser:
                                 print(f"[ALICE] Heuristic: Forwarding {name} call to VS Code MCP server...")
                                 mcp_res = await call_vscode_mcp_tool(name, args)
-                            else:
+                            elif is_browser and not is_vscode:
                                 print(f"[ALICE] Heuristic: Forwarding {name} call to BrowserOS MCP server...")
                                 mcp_res = await call_browseros_mcp_tool(name, args)
+                            else:
+                                # Default fallback
+                                if name.endswith("_code"):
+                                    print(f"[ALICE] Heuristic: Forwarding {name} call to VS Code MCP server...")
+                                    mcp_res = await call_vscode_mcp_tool(name, args)
+                                else:
+                                    print(f"[ALICE] Heuristic: Forwarding {name} call to BrowserOS MCP server...")
+                                    mcp_res = await call_browseros_mcp_tool(name, args)
                     result = mcp_res
                 else:
                     result = f"Unknown tool: {name}"
