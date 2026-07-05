@@ -39,13 +39,27 @@ It's not just an assistant — it's an extension of your digital life.
 
 ---
 
-## 🤖 Hermes Agent & BrowserOS Integration
+## 🔱 Custom Fork Features: Honcho, Hermes & UI Enhancements
 
-This modified fork of MARK XLVII is integrated with **Hermes Agent** and **BrowserOS** to enable advanced autonomous operations and robust web automation:
+This repository is a heavily modified custom fork of MARK XLVII, evolving the original vocal assistant into a production-grade, multi-agent hybrid system. The architecture has been substantially refactored to support deep automation, persistent memory backends, and decoupled browser infrastructure.
 
-- **Hermes Task Delegation**: Includes `hermes_daemon.py` on port `8085` to run autonomous coding and system tasks. Features a file-based async bridge (`.clarify` / `.clarify_response`) allowing ALICE to capture Hermes clarification requests and prompt the user interactively.
-- **BrowserOS Management**: Migrated browser automation entirely to **BrowserOS** Chrome MCP. All standard navigation, clicks, and snapshots run through the BrowserOS server.
-- **Firefox MCP Deprecation**: The legacy Firefox Marionette MCP debugger has been removed. Any browser commands or heuristic fallback calls previously targeting Firefox are automatically routed to BrowserOS Chrome for optimal stability and resource efficiency.
+### 🧠 Honcho Unified Memory Manager
+- **Self-Hosted Backend**: Replaced local file-based JSON memory (`long_term.json`) with a self-hosted **Honcho server** running on a Linux (Armbian) server.
+- **Persistent Peer Cards**: Implements live synchronization of user facts, project directories, and assistant conventions directly into Honcho's database, enabling seamless long-term context recall across restarts.
+
+### 🤖 Hermes Agent Integration
+- **Asynchronous Task Delegation**: Integrated a native `hermes_daemon.py` service (on port `8085`) acting as a background master-agent runner.
+- **Interactive Clarification Bridge**: Implemented a file-based asynchronous feedback loop (`.clarify` / `.clarify_response`) under `.hermes/logs`. When Hermes needs user input during background tasks, ALICE dynamically prompts the user via the Gemini Live voice/chat stream and routes the response back to Hermes to continue the run.
+
+### 🌐 BrowserOS Unified Web Automation
+- **Unified Engine**: Completely phased out resource-heavy local browser processes and the buggy Firefox Marionette MCP debugger.
+- **BrowserOS Integration**: All browser commands, scraping actions, and screenshots are routed to **BrowserOS** (Chrome MCP) running locally on port `9000`.
+- **Heuristic Redirection**: Heuristic mappings automatically rewrite any legacy or implicit Firefox/Chromium calls into BrowserOS-compatible tool commands.
+
+### 🎨 HUD UI & System Enhancements
+- **UI Modifications**: Custom transparency overlay, tray context controls, and minimized HUD states (color status indicators without bulky bars).
+- **Graceful Sound Stream Management**: The real-time sound stream has been optimized with strict error isolation. Microphone failures (e.g. Nakamichi N2 headset connections) are handled gracefully inside `_listen_audio` with a 15-second retry cooldown, preventing the Gemini Live session from crashing or entering infinite reconnect loops.
+- **Session Latency Management**: Auto-rotation of Gemini sessions after 12 completed interaction turns to prevent token buildup and maintain sub-second voice responsiveness.
 
 ---
 
