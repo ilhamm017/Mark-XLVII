@@ -2105,8 +2105,23 @@ class JarvisLive:
                         firefox_tools = {"list_pages", "new_page", "navigate_page", "select_page", "close_page", "take_snapshot", "screenshot_page", "navigate_history"}
                         
                         if name in firefox_tools or name.endswith("_page"):
-                            print(f"[ALICE] Heuristic: Forwarding {name} call to Custom Firefox MCP server...")
-                            mcp_res = await call_custom_mcp_tool(name, args)
+                            print(f"[ALICE] Heuristic: Redirecting Firefox tool '{name}' to BrowserOS MCP...")
+                            mapped_name = name
+                            mapped_args = args.copy() if isinstance(args, dict) else {}
+                            if name in ("navigate_page", "go_to"):
+                                mapped_name = "navigate"
+                            elif name == "new_page":
+                                mapped_name = "tabs"
+                                mapped_args = {"action": "create", "url": mapped_args.get("url", "")}
+                            elif name == "close_page":
+                                mapped_name = "tabs"
+                                mapped_args = {"action": "close", "tabId": mapped_args.get("tabId") or mapped_args.get("pageId")}
+                            elif name == "list_pages":
+                                mapped_name = "tabs"
+                                mapped_args = {"action": "list"}
+                            elif name in ("take_snapshot", "screenshot_page"):
+                                mapped_name = "snapshot"
+                            mcp_res = await call_browseros_mcp_tool(mapped_name, mapped_args)
                         else:
                             is_vscode = name.endswith("_code") or any(kw in name.lower() for kw in vscode_keywords)
                             is_browser = any(kw in name.lower() for kw in browseros_keywords)
