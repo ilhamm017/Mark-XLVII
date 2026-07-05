@@ -1362,7 +1362,7 @@ def _run_via_firefox_mcp(action: str, params: dict) -> str | None:
     try:
         if action == "go_to":
             url = params.get("url", "")
-            call_mcp_checked("new_page", {"url": url})
+            call_mcp_checked("navigate_page", {"url": url})
             return f"Opened: {url}"
 
         if action == "new_tab":
@@ -1433,7 +1433,7 @@ def _run_via_firefox_mcp(action: str, params: dict) -> str | None:
             query = params.get("query", "")
             engine = params.get("engine", "google")
             url = f"https://{engine}.com/search?q={quote(query)}"
-            call_mcp_checked("new_page", {"url": url})
+            call_mcp_checked("navigate_page", {"url": url})
             return f"Searching {engine} for '{query}'"
 
     except Exception as e:
@@ -1471,13 +1471,24 @@ def browser_control(
         _log(player, result)
         return result
 
+    # Determine the target browser: explicit parameter or active session fallback
+    target_browser = browser or _registry._active_browser
+    if target_browser:
+        target_browser = _ALIASES.get(target_browser.lower().strip(), target_browser.lower().strip())
+    
+    if not target_browser:
+        if _is_browseros_running():
+            target_browser = "browseros"
+        else:
+            target_browser = "chrome"
+
     # Determine if BrowserOS MCP or Firefox MCP should be used
     use_mcp = False
     use_firefox_mcp = False
     if action not in ("close",):
-        if browser in ("firefox", "mozilla firefox"):
+        if target_browser in ("firefox", "mozilla firefox"):
             use_firefox_mcp = True
-        elif not browser or browser in ("browseros", ""):
+        elif target_browser in ("browseros", ""):
             if _is_browseros_running():
                 use_mcp = True
             elif launch_browseros():
@@ -1507,7 +1518,7 @@ def browser_control(
             print(f"[Browser] MCP failed for '{action}': {e}, falling back to Playwright")
 
     try:
-        sess = _registry.get(browser)
+        sess = _registry.get(target_browser)
     except Exception as e:
         result = f"Could not start browser session: {e}"
         _log(player, result)

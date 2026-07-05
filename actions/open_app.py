@@ -396,6 +396,20 @@ def find_and_focus_window(app_name: str) -> bool:
         "systemsettings.exe": "settings",
     }
     
+    # Map common app names to typical window title keywords or process exe names
+    app_proc_map = {
+        "firefox": "firefox.exe",
+        "chrome": "chrome.exe",
+        "google chrome": "chrome.exe",
+        "edge": "msedge.exe",
+        "msedge": "msedge.exe",
+        "vs code": "code.exe",
+        "vscode": "code.exe",
+        "spotify": "spotify.exe",
+        "discord": "discord.exe",
+        "notepad": "notepad.exe",
+    }
+    target_exe = app_proc_map.get(app_name_lower)
     search_keyword = keyword_map.get(app_name_lower, app_name_lower)
     
     # Enumerate all visible windows on the taskbar (same logic as taskbar_manager)
@@ -419,9 +433,29 @@ def find_and_focus_window(app_name: str) -> bool:
                 return True
                 
             if not is_tool and (not has_parent or is_app):
-                # Search keyword case-insensitive match on window title
-                if search_keyword in title.lower():
+                try:
+                    _, win_pid = win32process.GetWindowThreadProcessId(hwnd)
+                    proc = psutil.Process(win_pid)
+                    proc_name = proc.name().lower()
+                except Exception:
+                    proc_name = ""
+
+                if target_exe == "chrome.exe" and proc_name == "chrome.exe":
+                    try:
+                        exe_path = proc.exe().lower()
+                        if "browseros" in exe_path:
+                            return True
+                    except Exception:
+                        pass
                     hwnds.append(hwnd)
+                elif target_exe and proc_name == target_exe:
+                    hwnds.append(hwnd)
+                elif not target_exe:
+                    # Search keyword case-insensitive match on window title
+                    if search_keyword in title.lower():
+                        if ("browseros" in title.lower() or "google chrome" in title.lower()) and "browseros" not in search_keyword and "chrome" not in search_keyword:
+                            return True
+                        hwnds.append(hwnd)
         return True
         
     try:
@@ -771,6 +805,28 @@ def open_app(
     app_name_lower = app_name.lower().strip()
 
     if app_name_lower in ["firefox", "mozilla firefox"]:
+        # First check if Firefox is already running and focus it if so
+        try:
+            import psutil
+            is_running = False
+            for proc in psutil.process_iter(['name']):
+                try:
+                    if proc.info['name'] and proc.info['name'].lower() == "firefox.exe":
+                        is_running = True
+                        break
+                except Exception:
+                    pass
+            if is_running:
+                if find_and_focus_window("firefox"):
+                    try:
+                        from actions.browser_control import _registry
+                        _registry._active_browser = "firefox"
+                    except Exception:
+                        pass
+                    return "Firefox is already running. Focused Firefox window."
+        except Exception as e:
+            print(f"[open_app] Failed to check/focus running Firefox: {e}")
+
         # Specialized handler for Firefox to write user.js and launch with --marionette
         try:
             # 1. Write user.js to Firefox profiles to ensure marionette port is 6000

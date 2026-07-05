@@ -293,6 +293,22 @@ def _focus_window(title: str) -> str:
             user32.SetActiveWindow.argtypes = [ctypes.c_void_p]
             user32.SetActiveWindow.restype = ctypes.c_void_p
             
+            import psutil
+            
+            # Map common app names to typical process exe names for precise matching
+            app_proc_map = {
+                "firefox": "firefox.exe",
+                "chrome": "chrome.exe",
+                "google chrome": "chrome.exe",
+                "edge": "msedge.exe",
+                "msedge": "msedge.exe",
+                "vs code": "code.exe",
+                "vscode": "code.exe",
+                "spotify": "spotify.exe",
+                "discord": "discord.exe",
+                "notepad": "notepad.exe",
+            }
+            target_exe = app_proc_map.get(title.lower().strip())
             found_hwnds = []
             
             def callback(hwnd, lParam):
@@ -302,8 +318,31 @@ def _focus_window(title: str) -> str:
                         buff = ctypes.create_unicode_buffer(length + 1)
                         user32.GetWindowTextW(hwnd, buff, length + 1)
                         window_title = buff.value
-                        if title.lower() in window_title.lower():
+                        
+                        try:
+                            lpdw_process_id = ctypes.c_ulong()
+                            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(lpdw_process_id))
+                            win_pid = lpdw_process_id.value
+                            proc = psutil.Process(win_pid)
+                            proc_name = proc.name().lower()
+                        except Exception:
+                            proc_name = ""
+
+                        if target_exe == "chrome.exe" and proc_name == "chrome.exe":
+                            try:
+                                exe_path = proc.exe().lower()
+                                if "browseros" in exe_path:
+                                    return True
+                            except Exception:
+                                pass
                             found_hwnds.append((hwnd, window_title))
+                        elif target_exe and proc_name == target_exe:
+                            found_hwnds.append((hwnd, window_title))
+                        elif not target_exe:
+                            if title.lower() in window_title.lower():
+                                if ("browseros" in window_title.lower() or "google chrome" in window_title.lower()) and "browseros" not in title.lower() and "chrome" not in title.lower():
+                                    return True
+                                found_hwnds.append((hwnd, window_title))
                 return True
                 
             cb = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(callback)
