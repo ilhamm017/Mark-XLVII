@@ -261,7 +261,8 @@ _ALIASES: dict[str, str] = {
     "microsoft edge":  "edge",
     "ms edge":         "edge",
     "msedge":          "edge",
-    "mozilla firefox": "firefox",
+    "mozilla firefox": "browseros",
+    "firefox":         "browseros",
     "opera gx":        "operagx",
     "opera_gx":        "operagx",
 }

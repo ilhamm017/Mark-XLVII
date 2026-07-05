@@ -82,34 +82,8 @@ def firefox_dispatcher():
 
 def start_firefox_mcp():
     global firefox_proc
-    cmd = [
-        r"C:\Users\Administrator\AppData\Roaming\npm\firefox-devtools-mcp.cmd",
-        "--connectExisting",
-        "--marionettePort",
-        "6000"
-    ]
-    try:
-        kwargs = {}
-        import subprocess as sp
-        if os.name == 'nt':
-            kwargs["creationflags"] = sp.CREATE_NO_WINDOW if hasattr(sp, "CREATE_NO_WINDOW") else 0x08000000
-        firefox_proc = sp.Popen(
-            cmd,
-            stdin=sp.PIPE,
-            stdout=sp.PIPE,
-            stderr=sp.PIPE,
-            **kwargs
-        )
-        
-        t1 = threading.Thread(target=read_firefox_stdout, args=(firefox_proc,), daemon=True)
-        t1.start()
-        
-        t2 = threading.Thread(target=firefox_dispatcher, daemon=True)
-        t2.start()
-        
-        print("[Daemon] Firefox DevTools MCP bridge started.")
-    except Exception as e:
-        print(f"[Daemon] Failed to start Firefox DevTools MCP subprocess: {e}")
+    print("[Daemon] Firefox DevTools MCP is disabled.")
+    firefox_proc = None
 
 app = FastAPI()
 
