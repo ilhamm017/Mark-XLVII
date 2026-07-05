@@ -724,6 +724,17 @@ def toggle_wifi():
         except Exception as e:
             print(f"[Settings] toggle_wifi Linux failed: {e}")
 
+def restart_alice():
+    print("[Settings] Restarting ALICE application...")
+    if _OS == "Windows":
+        subprocess.Popen(
+            "cmd.exe /c \"timeout /t 2 && taskkill /F /IM pythonw.exe && schtasks /run /tn RunAlice\"",
+            shell=True,
+            creationflags=0x08000000
+        )
+    else:
+        sys.exit(0)
+
 def restart_computer():
     if _OS == "Windows":
         subprocess.run(["shutdown", "/r", "/t", "10"], capture_output=True)
@@ -808,11 +819,18 @@ ACTION_MAP: dict[str, callable] = {
     "open_run":            open_run,
     "dark_mode":           dark_mode,
     "toggle_wifi":         toggle_wifi,
-    "restart":             restart_computer,
+    "restart":             restart_alice,
+    "restart_app":         restart_alice,
+    "restart_alice":       restart_alice,
+    "restart_computer":    restart_computer,
+    "restart_pc":          restart_computer,
+    "reboot":              restart_computer,
     "shutdown":            shutdown_computer,
+    "shutdown_computer":   shutdown_computer,
+    "shutdown_pc":         shutdown_computer,
 }
 
-_DANGEROUS_ACTIONS = {"restart", "shutdown"}
+_DANGEROUS_ACTIONS = {"restart_computer", "shutdown_computer"}
 
 
 
